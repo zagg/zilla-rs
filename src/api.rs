@@ -349,6 +349,8 @@ struct ConnectBody {
     tls: Option<String>,
     /// true : passif (PASV/EPSV), false : actif (PORT/EPRT).
     passive: Option<bool>,
+    /// Chemin d'une clé privée (SFTP).
+    keyfile: Option<String>,
 }
 
 async fn connect(State(app): State<Arc<App>>, Json(b): Json<ConnectBody>) -> Response {
@@ -374,6 +376,7 @@ async fn connect(State(app): State<Arc<App>>, Json(b): Json<ConnectBody>) -> Res
             b.proto.as_deref().unwrap_or("ftp"),
             b.tls.as_deref(),
             b.passive,
+            b.keyfile.as_deref(),
         )
         .await
     {

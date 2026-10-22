@@ -224,10 +224,10 @@ impl App {
         port: Option<u16>,
         proto: &str,
     ) -> FsResult<(String, ConnInfo)> {
-        self.quickconnect_ex(host, user, pass, port, proto, None, None).await
+        self.quickconnect_ex(host, user, pass, port, proto, None, None, None).await
     }
 
-    /// Connexion rapide élargie : niveau TLS et mode passif/actif explicites.
+    /// Connexion rapide élargie : niveau TLS, mode passif/actif, clé privée.
     pub async fn quickconnect_ex(
         &self,
         host: &str,
@@ -237,6 +237,7 @@ impl App {
         proto: &str,
         tls: Option<&str>,
         passive: Option<bool>,
+        keyfile: Option<&str>,
     ) -> FsResult<(String, ConnInfo)> {
         let mut site = Site::default();
         site.id = format!("qc-{}", short_id());
@@ -252,9 +253,18 @@ impl App {
         site.password = pass.to_string();
         site.login = if user.is_empty() {
             LoginType::Anonymous
-        } else {
+        } else if !pass.is_empty() {
             LoginType::Normal
+        } else if keyfile.unwrap_or("").is_empty() {
+            LoginType::Normal
+        } else {
+            LoginType::KeyOnly
         };
+        if let Some(k) = keyfile {
+            if !k.is_empty() {
+                site.keyfile = k.to_string();
+            }
+        }
         site.tls = match tls {
             Some(t) => TlsLevel::parse(t),
             None if site.proto.is_tls() => TlsLevel::IfAvailable,
