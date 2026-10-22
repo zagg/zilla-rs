@@ -635,9 +635,6 @@ impl FtpFs {
         i.tls_version = v;
         i.cipher = s;
         i.connections = 1;
-        if c.cfg.settings.ftp.passive {
-            i.active = false;
-        }
         i
     }
 
