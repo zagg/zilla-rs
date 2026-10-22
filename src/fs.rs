@@ -148,6 +148,37 @@ pub trait RemoteFs: Send + Sync {
         self.stat(path).await.is_ok()
     }
 
+    /// Crée un dossier distant et tous ses parents, comme le fait FileZilla
+    /// quand on envoie vers une arborescence qui n'existe pas encore.
+    async fn mkdir_p(&self, path: &str) -> FsResult<()> {
+        if self.exists(path).await {
+            return Ok(());
+        }
+        // remonte la chaîne jusqu'au premier ancêtre existant
+        let mut missing: Vec<String> = Vec::new();
+        let mut cur = path.to_string();
+        loop {
+            if self.exists(&cur).await {
+                break;
+            }
+            missing.push(cur.clone());
+            let parent = crate::util::remote_parent(&cur);
+            if parent == cur || parent.is_empty() {
+                break;
+            }
+            cur = parent;
+            if missing.len() > 64 {
+                break;
+            }
+        }
+        for m in missing.into_iter().rev() {
+            if !self.exists(&m).await {
+                self.mkdir(&m).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn size(&self, path: &str) -> Option<u64> {
         self.stat(path).await.ok().map(|e| e.size)
     }

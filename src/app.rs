@@ -224,6 +224,20 @@ impl App {
         port: Option<u16>,
         proto: &str,
     ) -> FsResult<(String, ConnInfo)> {
+        self.quickconnect_ex(host, user, pass, port, proto, None, None).await
+    }
+
+    /// Connexion rapide élargie : niveau TLS et mode passif/actif explicites.
+    pub async fn quickconnect_ex(
+        &self,
+        host: &str,
+        user: &str,
+        pass: &str,
+        port: Option<u16>,
+        proto: &str,
+        tls: Option<&str>,
+        passive: Option<bool>,
+    ) -> FsResult<(String, ConnInfo)> {
         let mut site = Site::default();
         site.id = format!("qc-{}", short_id());
         site.name = if user.is_empty() {
@@ -241,11 +255,14 @@ impl App {
         } else {
             LoginType::Normal
         };
-        site.tls = if site.proto.is_tls() {
-            TlsLevel::IfAvailable
-        } else {
-            TlsLevel::Plain
+        site.tls = match tls {
+            Some(t) => TlsLevel::parse(t),
+            None if site.proto.is_tls() => TlsLevel::IfAvailable,
+            None => TlsLevel::Plain,
         };
+        if let Some(p) = passive {
+            site.passive = Some(p);
+        }
         self.push_recent_host(site.display());
         let id = self.put_ephemeral(site.clone());
         match self.connect(&site).await {

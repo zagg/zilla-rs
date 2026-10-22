@@ -158,23 +158,55 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
 
 /// Configuration TLS, selon les réglages.
 pub fn tls_config(settings: &Settings) -> ClientConfig {
+    const BOTH: [&'static rustls::SupportedProtocolVersion; 2] =
+        [&rustls::version::TLS12, &rustls::version::TLS13];
+    const ONLY13: [&'static rustls::SupportedProtocolVersion; 1] = [&rustls::version::TLS13];
+    let versions: &[&'static rustls::SupportedProtocolVersion] =
+        if settings.tls.min_version.starts_with("1.2") {
+            &BOTH
+        } else {
+            &ONLY13
+        };
+    let builder = ClientConfig::builder_with_protocol_versions(versions);
     if settings.tls.verify_cert {
         let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        // Les fichiers d'autorité locaux sont ajoutés s'ils peuvent l'être.
+        // Les fichiers d'autorité locaux (DER ou PEM) sont ajoutés s'ils peuvent l'être.
         for f in &settings.tls.ca_files {
-            if let Ok(bytes) = std::fs::read(f) {
-                let der = rustls::pki_types::CertificateDer::from(bytes);
-                let _ = roots.add(der);
-            }
+            load_ca(f, &mut roots);
         }
-        ClientConfig::builder()
+        builder
             .with_root_certificates(roots)
             .with_no_client_auth()
     } else {
-        ClientConfig::builder()
+        builder
             .dangerous()
             .with_custom_certificate_verifier(std::sync::Arc::new(NoVerifier))
             .with_no_client_auth()
+    }
+}
+
+/// Charge une autorité de certification depuis un fichier DER ou PEM.
+fn load_ca(path: &str, store: &mut RootCertStore) {
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    if text.contains("-----BEGIN") {
+        // découpage manuel des blocs PEM, sans dépendance supplémentaire
+        let mut rest = text.as_str();
+        while let Some(i) = rest.find("-----BEGIN CERTIFICATE-----") {
+            rest = &rest[i + "-----BEGIN CERTIFICATE-----".len()..];
+            let end = rest
+                .find("-----END CERTIFICATE-----")
+                .unwrap_or(rest.len());
+            let b64: String = rest[..end].chars().filter(|c| !c.is_whitespace()).collect();
+            rest = &rest[end..];
+            if let Ok(der) = base64::engine::general_purpose::STANDARD.decode(&b64) {
+                let _ = store.add(rustls::pki_types::CertificateDer::from(der));
+            }
+        }
+    } else {
+        let _ = store.add(rustls::pki_types::CertificateDer::from(bytes));
     }
 }
 

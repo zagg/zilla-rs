@@ -681,6 +681,15 @@ async fn upload(
         human_size(size),
         remote
     ));
+    // le dossier de destination peut manquer côté serveur : on le crée,
+    // comme FileZilla qui envoie MKD avant STOR.
+    let parent = crate::util::remote_parent(remote);
+    if !parent.is_empty() && parent != remote && !fs.exists(&parent).await {
+        fs.mkdir_p(&parent)
+            .await
+            .map_err(|e| format!("création du dossier distant {parent} : {e}"))?;
+        hub.status(format!("Dossier distant créé : {parent}"));
+    }
     let mut sink = fs.open_write(remote, offset, append).await.map_err(|e| e.to_string())?;
     let mut src = FileSrc::open(local, offset).await?;
     let mut tr = Tracker::new(&job.id, engine, size, settings.speed_limit(true));

@@ -788,15 +788,10 @@ impl FtpFs {
             .find(|l| l.starts_with(' ') && l.contains(';'))
             .unwrap_or("");
         match listparse::parse_mlsd(line.trim()) {
-            Some(mut e) => {
-                if let Some(tail) = line.split(';').last() {
-                    let name = tail.split_whitespace().next().unwrap_or("");
-                    if !name.is_empty() {
-                        e.name = name.to_string();
-                    }
-                }
-                Ok(e)
-            }
+            // parse_mlsd sait déjà séparer les faits du chemin, y compris quand
+            // le serveur renvoie le chemin intégral : on garde ce nom-ci, qui
+            // est le seul cohérent avec ce qu'affiche le panneau.
+            Some(e) => Ok(e),
             None => Err(FsError::Protocol("MLST non interprétable".into())),
         }
     }

@@ -339,7 +339,14 @@ pub fn parse_mlsd(line: &str) -> Option<Entry> {
     let line = line.trim_end();
     let cut = line.rfind(';')?;
     let facts = &line[..cut];
-    let name = line[cut + 1..].trim().to_string();
+    let raw = line[cut + 1..].trim().to_string();
+    // Certains serveurs (et le mode récursif) renvoient le chemin complet dans
+    // le dernier champ : on garde le chemin intégral de côté et seul le nom
+    // simple sert pour l'affichage et la jointure locale.
+    let (name, full) = match raw.rfind('/') {
+        Some(i) => (raw[i + 1..].to_string(), Some(raw.clone())),
+        None => (raw.clone(), None),
+    };
     if name.is_empty() || name == "." || name == ".." {
         return None;
     }
@@ -390,7 +397,7 @@ pub fn parse_mlsd(line: &str) -> Option<Entry> {
         group,
         link,
         hidden,
-        path: None,
+        path: full,
     })
 }
 
@@ -518,6 +525,19 @@ mod tests {
         let u = parse_mlsd("type=file;size=1;unix.mode=0644;unix.owner=root; x").unwrap();
         assert_eq!(u.mode, Some(0o644));
         assert_eq!(u.user.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn mlsd_chemin_complet() {
+        // certains serveurs (et le mode récursif) mettent le chemin intégral
+        // après les faits : le nom doit rester le simple composant final.
+        let e = parse_mlsd("type=file;size=76800;modify=20210314081200; /docs/grosse-bille.bin").unwrap();
+        assert_eq!(e.name, "grosse-bille.bin");
+        assert_eq!(e.path.as_deref(), Some("/docs/grosse-bille.bin"));
+        assert_eq!(e.size, 76800);
+        let d = parse_mlsd("type=cdir;/");
+        assert!(d.is_none(), "le point courant doit être ignoré");
+        assert!(parse_mlsd("type=dir;/a/.").is_none());
     }
 
     #[test]

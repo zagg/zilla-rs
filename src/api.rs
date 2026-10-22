@@ -345,6 +345,10 @@ struct ConnectBody {
     password: Option<String>,
     port: Option<u16>,
     proto: Option<String>,
+    /// Niveau TLS : « plain », « if », « require », « pfs ».
+    tls: Option<String>,
+    /// true : passif (PASV/EPSV), false : actif (PORT/EPRT).
+    passive: Option<bool>,
 }
 
 async fn connect(State(app): State<Arc<App>>, Json(b): Json<ConnectBody>) -> Response {
@@ -362,12 +366,14 @@ async fn connect(State(app): State<Arc<App>>, Json(b): Json<ConnectBody>) -> Res
         _ => return err("hôte ou site_id attendu"),
     };
     match app
-        .quickconnect(
+        .quickconnect_ex(
             &host,
             b.user.as_deref().unwrap_or(""),
             b.password.as_deref().unwrap_or(""),
             b.port,
             b.proto.as_deref().unwrap_or("ftp"),
+            b.tls.as_deref(),
+            b.passive,
         )
         .await
     {
