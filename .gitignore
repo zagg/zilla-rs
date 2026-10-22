@@ -1,0 +1,22 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# configurations locales et données personnelles
+/zcfg/
+/zilla.cfg
+/zilla.json
+/sitemanager.xml
+*.local.xml
+.env
+.envrc
+
+# logs
+*.log
+logs/
+
+# éditeurs
+.idea/
+.vscode/
+*.swp
+.DS_Store

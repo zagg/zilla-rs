@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Zilla-RS — Client FTP/FTPS/SFTP</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body class="theme-dark">
+<div id="app">
+
+  <!-- Barre d'outils principale -->
+  <header id="toolbar" class="row toolbar">
+    <div class="brand" id="brand" title="Zilla-RS — cliquer pour l'à-propos">
+      <img src="/icon.svg" alt="" width="20" height="20">
+      <span>Zilla-RS</span>
+    </div>
+    <button class="btn" id="btn-sites" title="Ouvrir le gestionnaire de sites (Ctrl+S)">
+      <svg viewBox="0 0 24 24" class="i"><path d="M3 7h6l2 2h10v10H3z"/></svg>Gestionnaire
+    </button>
+    <button class="btn primary" id="btn-connect" title="Se connecter au site ciblé">
+      <svg viewBox="0 0 24 24" class="i"><path d="M8 5v14l11-7z"/></svg>Se connecter
+    </button>
+    <button class="btn" id="btn-disconnect" title="Déconnecter (Ctrl+Shift+D)">
+      <svg viewBox="0 0 24 24" class="i"><path d="M6 6h12v12H6z"/></svg>Déconnecter
+    </button>
+    <button class="btn" id="btn-reconnect" title="Reconnecter (Ctrl+Shift+R)">
+      <svg viewBox="0 0 24 24" class="i"><path d="M12 5V2L7 7l5 5V8a5 5 0 1 1-5 5H5a7 7 0 1 0 7-8z"/></svg>
+    </button>
+    <button class="btn" id="btn-both-refresh" title="Actualiser les deux panneaux (F5)">
+      <svg viewBox="0 0 24 24" class="i"><path d="M4 4v6h6M20 20v-6h-6M5 14a7 7 0 0 1 12-3m1 4a7 7 0 0 1-12 3"/></svg>
+    </button>
+    <span class="sep"></span>
+    <button class="btn" id="btn-queue" title="File de transferts (Ctrl+Alt+T)">
+      <svg viewBox="0 0 24 24" class="i"><path d="M4 3h16v3H4zm0 6h16v3H4zm0 6h10v3H4z"/></svg>
+      <span class="pill" id="queue-badge">0</span>
+    </button>
+    <button class="btn" id="btn-search" title="Rechercher (Ctrl+F)">
+      <svg viewBox="0 0 24 24" class="i"><circle cx="10" cy="10" r="6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-5-5" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
+    <button class="btn" id="btn-bookmarks" title="Signets">
+      <svg viewBox="0 0 24 24" class="i"><path d="M6 2h12v20l-6-4-6 4z"/></svg>
+    </button>
+    <button class="btn" id="btn-palette" title="Rechercher une commande (Ctrl+K)">⌘</button>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="btn-theme" title="Basculer le thème">☾</button>
+    <button class="btn ghost" id="btn-log-pane" title="Afficher/masquer le journal">🗒</button>
+    <button class="btn ghost" id="btn-settings" title="Réglages (Ctrl+,)">⚙</button>
+    <button class="btn ghost" id="btn-help" title="Aide et raccourcis (F1)">?</button>
+  </header>
+
+  <!-- Connexion rapide -->
+  <div class="row qc">
+    <label for="qc-host">Adresse</label>
+    <input id="qc-host" list="recent-hosts" placeholder="ftp.example.org" autocomplete="off" spellcheck="false">
+    <datalist id="recent-hosts"></datalist>
+    <label for="qc-user">Identifiant</label>
+    <input id="qc-user" placeholder="utilisateur" autocomplete="username">
+    <label for="qc-pass">Mot de passe</label>
+    <input id="qc-pass" type="password" placeholder="••••••" autocomplete="current-password">
+    <label for="qc-port">Port</label>
+    <input id="qc-port" class="w-port" placeholder="21">
+    <label for="qc-proto">Type</label>
+    <select id="qc-proto">
+      <option value="ftp">FTP</option>
+      <option value="ftpes">FTPES</option>
+      <option value="ftps">FTPS</option>
+      <option value="sftp">SFTP</option>
+    </select>
+    <button class="btn primary" id="qc-go">Connecter</button>
+  </div>
+
+  <!-- Fil d'Ariane des deux panneaux -->
+  <div class="row paths">
+    <div class="crumbs" id="crumbs-local" data-pane="local"></div>
+    <input class="pathedit" id="pathedit-local" spellcheck="false" placeholder="Chemin local…">
+    <button class="btn mini" id="up-local" title="Monter (Alt+PageUp)">↑</button>
+    <div class="crumbs" id="crumbs-remote" data-pane="remote"></div>
+    <input class="pathedit" id="pathedit-remote" spellcheck="false" placeholder="/">
+    <button class="btn mini" id="up-remote" title="Monter (Alt+PageDown)">↑</button>
+  </div>
+
+  <!-- Zone principale -->
+  <main id="panes">
+    <section class="pane" id="pane-local" tabindex="0" data-pane="local">
+      <div class="pane-head">
+        <span class="pane-title">Local</span>
+        <input class="filter" id="filter-local" placeholder="Filtrer…">
+        <span class="grow"></span>
+        <button class="btn mini" data-act="mkdir" title="Nouveau dossier">＋</button>
+        <button class="btn mini" data-act="refresh" title="Actualiser">↻</button>
+      </div>
+      <div class="cols" id="cols-local"></div>
+      <div class="list" id="list-local"></div>
+      <div class="drop-hint" id="hint-local">Déposez ici pour télécharger</div>
+    </section>
+
+    <div class="gutter" id="g1"></div>
+
+    <section class="pane queuepane" id="pane-queue" tabindex="0">
+      <div class="pane-head">
+        <span class="pane-title">Transferts</span>
+        <span class="grow"></span>
+        <button class="btn mini" id="q-pause" title="Pause">⏸</button>
+        <button class="btn mini" id="q-clear" title="Effacer les terminés">🧹</button>
+        <button class="btn mini" id="q-more" title="Ouvrir la fenêtre détaillée">⤢</button>
+      </div>
+      <div class="cols cols-queue" id="cols-queue"></div>
+      <div class="list list-queue" id="list-queue"></div>
+      <div class="q-stats" id="q-stats"></div>
+    </section>
+
+    <div class="gutter" id="g2"></div>
+
+    <section class="pane" id="pane-remote" tabindex="0" data-pane="remote">
+      <div class="pane-head">
+        <span class="pane-title">Distant</span>
+        <input class="filter" id="filter-remote" placeholder="Filtrer…">
+        <span class="grow"></span>
+        <button class="btn mini" data-act="mkdir" title="Nouveau dossier">＋</button>
+        <button class="btn mini" data-act="refresh" title="Actualiser">↻</button>
+      </div>
+      <div class="cols" id="cols-remote"></div>
+      <div class="list" id="list-remote"></div>
+      <div class="drop-hint" id="hint-remote">Déposez ici pour envoyer</div>
+    </section>
+  </main>
+
+  <!-- Journal -->
+  <div class="logwrap" id="logwrap">
+    <div class="logtabs row">
+      <div class="tabs">
+        <button class="tab active" data-log="all">Tous</button>
+        <button class="tab" data-log="server">Serveur</button>
+        <button class="tab" data-log="file">Fichiers</button>
+        <button class="tab" data-log="transfers">Transferts</button>
+        <button class="tab" data-log="status">Statut</button>
+      </div>
+      <span class="grow"></span>
+      <label class="mini-label"><input type="checkbox" id="log-verbose"> détail</label>
+      <button class="btn mini" id="log-clear" title="Vider le journal">🗑</button>
+      <button class="btn mini" id="log-save" title="Enregistrer le journal">💾</button>
+      <button class="grip" id="log-grip" title="Redimensionner">≡</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <!-- Barre de statut -->
+  <footer class="row status">
+    <div class="stat" id="st-local"></div>
+    <div class="stat" id="st-remote"></div>
+    <div class="stat" id="st-conns"></div>
+    <div class="grow"></div>
+    <div class="stat" id="st-speed"></div>
+    <div class="stat" id="st-info" title="Informations de connexion">ⓘ</div>
+  </footer>
+
+  <nav class="context hidden" id="context"></nav>
+  <div class="toasts" id="toasts"></div>
+  <div class="overlay hidden" id="overlay"><div class="dialog-host" id="dialog"></div></div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
