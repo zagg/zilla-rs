@@ -5,8 +5,9 @@
      node tools/verif-ui.js        un silence est un succès
      TRACE=1 node tools/verif-ui.js   montre chaque appel HTTP
 
-   C'est un harnais de veillesse, pas un test : il dit que le câblage tient,
-   pas que la mise en page est belle. */
+   C'est un harnais de câblage, pas un test : il dit que les raccords tiennent,
+   pas que la mise en page est belle. Ce qu'il trouve tient donc pour deux —
+   une faute dans app.js, ou une faute dans son propre DOM de fortune. */
 "use strict";
 const fs = require("fs");
 const path = require("path");
