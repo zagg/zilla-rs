@@ -472,6 +472,29 @@ pub fn relative(base: &Path, p: &Path) -> String {
 }
 
 #[cfg(test)]
+mod mttests {
+    use super::*;
+    #[test]
+    fn reglage_d_horodatage() {
+        let d = std::env::temp_dir().join(format!("zilla-mt-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&d);
+        let f = d.join("x.txt");
+        std::fs::write(&f, b"contenu").unwrap();
+        let ts = 1_600_000_000i64;
+        assert!(set_mtime(&f, ts).is_ok());
+        let got = std::fs::metadata(&f)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert_eq!(got, ts);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

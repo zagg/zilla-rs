@@ -5,7 +5,7 @@
 Zilla-RS est un client de transfert autonome et sans dépendance : un seul processus Rust
 héberge toute l'application (API HTTP, mises à jour temps réel WebSocket, moteur de transferts,
 pile de protocoles FTP/FTPS/SFTP) et distribue une interface web maison. Aucun CDN, aucun Node,
-aucun bundleur, aucun Electron : ouvrez `http://127.0.0.1:8230` et transférez.
+aucun bundleur, aucun Electron : ouvrez `http://<cette-machine>:8734` et transférez.
 
 ## Pourquoi ce projet
 
@@ -35,7 +35,7 @@ transferts, journal que l'on lit vraiment — tout en étant :
 **Moteur de transferts**
 - Transferts parallèles avec un pool de connexions par site
 - Priorités, limitation de bande passante, pause/reprise/annulation/essai à nouveau
-- Reprise (`REST`), stratégies écraser/passer/plus récent/rebaptiser, préservation des dates
+- Reprise (`REST`), stratégies écraser/passer/plus récent/rebaptiser, préservation des dates (`MDTM`/`MFMT`)
 - Récursion de dossiers, persistance de la file, notification de fin de file
 
 **Gestionnaire de sites**
@@ -48,59 +48,67 @@ transferts, journal que l'on lit vraiment — tout en étant :
 - Catégories de journal (`general`, `command`, `status`, `transfer` …), horodatage, sauvegarde
 - Thèmes (sombre/clair), police, taille des panneaux — sauvegardés par navigateur
 
+**Comparaison de dossiers**
+- `GET /api/compare?site=…&local=…&remote=…` parcourt les deux arborescences et rend `same`,
+  `different`, `local_only`, `remote_only`, plus les octets à descendre ou à monter
+- Dialogue « Comparaison des dossiers » (Ctrl+Maj+C) : on coche les écarts, puis on les envoie
+  d'un côté ou de l'autre en gardant la structure (`base`)
+
 **Auto-tests**
-- 16 contrôles de bout en bout contre un serveur FTP de démonstration, dans l'UI ou en ligne de commande
+- 16 contrôles de bout en bout contre un serveur FTP ephémère lancé par le test, dans l'UI ou en ligne de commande
 
 ## Démarrage rapide
 
 ```sh
 git clone https://github.com/zagg/zilla-rs.git
 cd zilla-rs
-cargo run --release            # http://127.0.0.1:8230
-```
-
-Pour cliquer tout de suite, le mode démonstration installe un serveur FTP factice et des fichiers :
-
-```sh
-cargo run --release -- demo     # FTP de démo sur 127.0.0.1:2121, UI sur 8230
+cargo run --release            # écoute sur 0.0.0.0:8734 — ouvrez http://<cette-machine>:8734
 ```
 
 ## Ligne de commande
 
 ```
-zilla serve   [-c config] [--port N] [--host IP] [--no-browser]   démarre l'application web
-zilla demo    [-c config] [--port N]                              serveur FTP de démo + UI
+zilla serve   [-c dir] [-b ip] [-p n] [-q]                        démarre l'application web
 zilla selftest [-c config]                                        lance les 16 contrôles
 zilla import  <sitemanager.xml>                                   importe les sites FileZilla
 zilla export  <sitemanager.xml>                                   exporte en XML FileZilla
 zilla version
 ```
 
+`-b/--bind` (ou `--host`) vaut `0.0.0.0` par defaut, soit toutes les interfaces : l'interface
+est atteignable depuis le reseau local des le demarrage, et `http://127.0.0.1:8734` fonctionne
+toujours depuis la machine. Utilisez `-b 127.0.0.1` pour la limiter au poste.
+
 La configuration est un fichier JSON unique par dossier `--config` (par défaut
 `~/.config/zilla-rs/zilla.json`) qui contient aussi les sites, les récents, les favoris et la file.
 
 ## API HTTP
 
-Tous les points sont sous `/api`. Le serveur publie un jeton par session et l'injecte dans la
-page ; les appels qui modifient l'état doivent le renvoyer dans `x-zilla-token`.
+Tous les points sont sous `/api`. Aucun authentifiant, aucune session : c'est un outil de
+reseau local, quiconque atteint le port peut piloter l'application.
 
 ```sh
-JETON=$(curl -s localhost:8230/api/status | jq -r .data.token)
-
 # connexion rapide en SFTP
-curl -s -H "content-type: application/json" -H "x-zilla-token: $JETON" \
+curl -s -H "content-type: application/json" \
   -d '{"host":"exemple.fr","port":22,"proto":"sftp","user":"bob","password":"secret"}' \
-  localhost:8230/api/connect
+  localhost:8734/api/connect
 
 # lister un répertoire
-curl -s -H "x-zilla-token: $JETON" \
-  "localhost:8230/api/remote/list?site=<idSite>&path=/var"
+curl -s "localhost:8734/api/remote/list?site=<idSite>&path=/var"
 
 # demander un téléchargement récursif
-curl -s -H "content-type: application/json" -H "x-zilla-token: $JETON" \
+curl -s -H "content-type: application/json" \
   -d '{"site":"<idSite>","paths":["/var/log"],"dir":"/tmp/sauvegarde","dirs":true}' \
-  localhost:8230/api/download
+  localhost:8734/api/download
+
+# en gardant l'arborescence : tout ce qui est sous `base` est recopié a l'identique
+curl -s -H "content-type: application/json" \
+  -d '{"site":"<idSite>","paths":["/srv/www/index.html"],"dir":"/tmp/sauvegarde","dirs":true,"base":"/srv/www"}' \
+  localhost:8734/api/download
 ```
+
+`paths` accepte des chemins absolus, ou relatifs quand `base` est fourni — c'est exactement
+la façon dont le dialogue de comparaison nourrit la file.
 
 `/_ws` diffuse les évènements (`log`, `queue`, `connections`, `toast`) pour rafraîchir l'interface.
 Contrôle de santé : `GET /api/selftest`.
@@ -114,8 +122,9 @@ n'est utilisé ni compilé. Voir `docs/REA.md`.
 
 ## Sécurité
 
-- Le serveur écoute sur `127.0.0.1` par défaut ; `--host` permet de l'exposer, et dans ce cas
-  le garde-fou à jeton est la seule authentification. Pas de mode multi-utilisateur.
+- Le serveur écoute sur `0.0.0.0:8734` par defaut : tout le reseau peut ouvrir l'interface et
+  la piloter. Il n'y a aucune authentification, aucun mode multi-utilisateur — gardez-le sur un
+  reseau de confiance, ou revenez a l'ecoute locale avec `--bind 127.0.0.1`.
 - Les mots de passe des sites sont stockés en clair dans le fichier de configuration, comme dans
   le XML de FileZilla : protégez ce fichier (`chmod 600`).
 - Le TLS s'appuie sur `rustls` avec le magasin racine Mozilla (`webpki-roots`). La validation

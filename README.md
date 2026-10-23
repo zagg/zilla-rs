@@ -5,7 +5,7 @@
 Zilla-RS is a self-contained, autonomous transfer client: one Rust process hosts the whole
 application (HTTP API, WebSocket live updates, transfer engine, FTP/FTPS/SFTP protocol stack)
 and serves a dependency-free web UI. No CDN, no Node, no bundling, no Electron, no external
-assets: open `http://127.0.0.1:8230` and start transferring.
+assets: open `http://<this-host>:8734` and start transferring.
 
 ## Why this exists
 
@@ -35,7 +35,7 @@ being:
 **Transfer engine**
 - Parallel transfers with per-site connection pools
 - Priorities, bandwidth throttling, pause/resume/cancel/retry
-- Resume (`REST`), overwrite/skip/newer/rename policies, mtime preservation
+- Resume (`REST`), overwrite/skip/newer/rename policies, mtime preservation (`MDTM`/`MFMT`)
 - Directory recursion, queue persistence across restarts, completion notification
 
 **Site manager**
@@ -48,33 +48,37 @@ being:
 - Log categories (`general`, `command`, `status`, `transfer`, …), timestamps, save to file
 - Themes (dark/light), font, pane layout — persisted per browser
 
+**Folder comparison**
+- `GET /api/compare?site=…&local=…&remote=…` walks both trees and reports `same`, `different`,
+  `local_only`, `remote_only`, plus bytes to download/upload
+- Drives the "Compare folders" dialog (Ctrl+Shift+C): pick the differences, then queue them
+  in one direction while keeping the tree structure (`base` parameter)
+
 **Selftest**
-- 16 end-to-end checks against an embedded demo FTP server, run from the UI or the CLI
+- 16 end-to-end checks run against a throwaway FTP server the checks start themselves, on the
+  UI or from the CLI
 
 ## Quick start
 
 ```sh
 git clone https://github.com/zagg/zilla-rs.git
 cd zilla-rs
-cargo run --release            # opens http://127.0.0.1:8230
-```
-
-Want something to click around? Demo mode seeds a fake FTP server and files for you:
-
-```sh
-cargo run --release -- demo     # embedded FTP on 127.0.0.1:2121, UI on 8230
+cargo run --release            # listens on 0.0.0.0:8734 — open http://<this-host>:8734
 ```
 
 ## CLI
 
 ```
-zilla serve   [-c config] [--port N] [--host IP] [--no-browser]   start the web app
-zilla demo    [-c config] [--port N]                              demo FTP server + UI
+zilla serve   [-c dir] [-b IP] [-p N] [-q]                        start the web app
 zilla selftest [-c config]                                        run the 16 protocol checks
 zilla import  <sitemanager.xml>                                   import FileZilla sites
 zilla export  <sitemanager.xml>                                   export sites to FileZilla XML
 zilla version
 ```
+
+`-b/--bind` (or `--host`) defaults to `0.0.0.0`, i.e. every interface: the UI is reachable
+from the local network out of the box, and `http://127.0.0.1:8734` still works from the
+machine itself. Pass `-b 127.0.0.1` to keep it local-only.
 
 Configuration is a single JSON file per `--config` directory (default
 `~/.config/zilla-rs/zilla.json`), which also holds sites, recents, bookmarks and the
@@ -82,26 +86,31 @@ transfer queue.
 
 ## HTTP API
 
-All endpoints live under `/api`. The server prints a per-session token into the log and injects
-it into the page; mutating calls must send it as `x-zilla-token`.
+All endpoints live under `/api`. No authentication, no session: the server is a LAN tool,
+anyone who can reach the port can drive it.
 
 ```sh
-TOKEN=$(curl -s localhost:8230/api/status | jq -r .data.token)
-
 # quick-connect over SFTP
-curl -s -H "content-type: application/json" -H "x-zilla-token: $TOKEN" \
+curl -s -H "content-type: application/json" \
   -d '{"host":"example.org","port":22,"proto":"sftp","user":"bob","password":"secret"}' \
-  localhost:8230/api/connect
+  localhost:8734/api/connect
 
 # list a directory
-curl -s -H "x-zilla-token: $TOKEN" \
-  "localhost:8230/api/remote/list?site=<siteId>&path=/var"
+curl -s "localhost:8734/api/remote/list?site=<siteId>&path=/var"
 
 # queue a recursive download
-curl -s -H "content-type: application/json" -H "x-zilla-token: $TOKEN" \
+curl -s -H "content-type: application/json" \
   -d '{"site":"<siteId>","paths":["/var/log"],"dir":"/tmp/back","dirs":true}' \
-  localhost:8230/api/download
+  localhost:8734/api/download
+
+# keep the tree: every path below `base` is mirrored on the other side
+curl -s -H "content-type: application/json" \
+  -d '{"site":"<siteId>","paths":["/srv/www/index.html"],"dir":"/tmp/back","dirs":true,"base":"/srv/www"}' \
+  localhost:8734/api/download
 ```
+
+`paths` may be absolute, or relative when `base` is given — that is exactly how the
+compare dialog feeds the queue.
 
 `/_ws` streams JSON events (`log`, `queue`, `connections`, `toast`) for live UI refresh.
 End-to-end health checks: `GET /api/selftest`.
@@ -114,8 +123,9 @@ implementation is original Rust, no FileZilla code is used or linked. See `docs/
 
 ## Security notes
 
-- The web server binds to `127.0.0.1` by default; `--host` lets you expose it, in which case
-  the token guard is your only authentication. There is no multi-user mode.
+- The web server listens on `0.0.0.0:8734` by default: anyone on the network can open the UI
+  and drive it. There is no authentication and no multi-user mode — keep it on a trusted
+  network, or bind it back to the machine with `--bind 127.0.0.1`.
 - Site passwords are stored in the local config file in clear text, exactly like FileZilla's
   XML; keep that file protected (`chmod 600`).
 - TLS uses `rustls` with the Mozilla root store (`webpki-roots`). Certificate validation is
@@ -126,7 +136,7 @@ implementation is original Rust, no FileZilla code is used or linked. See `docs/
 
 ```sh
 cargo test --lib          # 20 unit tests (list parsers, paths, ids)
-cargo test                # + integration tests (demo server, pools, transfer queue)
+cargo test                # + integration tests (fixture FTP server, pools, transfer queue)
 cargo build --release
 ./target/release/zilla selftest
 ```

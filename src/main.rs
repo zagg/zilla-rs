@@ -1,8 +1,7 @@
 //! Zilla-RS : client FTP/FTPS/SFTP web, clone autonome de FileZilla.
 //!
 //! ```text
-//! zilla serve    → interface web sur http://127.0.0.1:8734
-//! zilla demo     → interface + mini-serveur FTP de démonstration
+//! zilla serve    → interface web sur http://<hote>:8734 (écoute 0.0.0.0 par défaut)
 //! zilla selftest → auto-tests client complet
 //! zilla import   → importe un sitemanager.xml de FileZilla
 //! zilla export   → exporte le gestionnaire de sites en XML
@@ -13,7 +12,6 @@ use std::path::PathBuf;
 use tokio::net::TcpListener;
 use zilla_rs::api;
 use zilla_rs::app::App;
-use zilla_rs::demosrv::DemoFtp;
 use zilla_rs::util::default_config_dir;
 
 const VERSION: &str = zilla_rs::VERSION;
@@ -22,16 +20,14 @@ struct Flags {
     bind: String,
     port: u16,
     config: PathBuf,
-    root: PathBuf,
     quiet: bool,
 }
 
 fn parse_flags(args: &[String]) -> Flags {
     let mut f = Flags {
-        bind: "127.0.0.1".into(),
+        bind: "0.0.0.0".into(),
         port: 8734,
         config: default_config_dir(),
-        root: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         quiet: false,
     };
     let mut i = 0;
@@ -42,10 +38,9 @@ fn parse_flags(args: &[String]) -> Flags {
             args.get(*i).cloned().unwrap_or_default()
         };
         match a {
-            "--bind" | "-b" => f.bind = get(&mut i),
+            "--bind" | "-b" | "--host" => f.bind = get(&mut i),
             "--port" | "-p" => f.port = get(&mut i).parse().unwrap_or(8734),
             "--config" | "--config-dir" | "-c" => f.config = PathBuf::from(get(&mut i)),
-            "--root" => f.root = PathBuf::from(get(&mut i)),
             "--quiet" | "-q" => f.quiet = true,
             _ => {}
         }
@@ -58,10 +53,11 @@ fn parse_flags(args: &[String]) -> Flags {
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().cloned().unwrap_or_else(|| "serve".into());
-    let flags = parse_flags(&args[1.min(args.len())..]);
+    // Les options sont lues dans la ligne de commande entiere : `zilla serve -p 9`
+    // comme `zilla -p 9` (le nom de sous-commande ne gene pas le parseur).
+    let flags = parse_flags(&args);
     match cmd.as_str() {
-        "serve" | "run" | "web" => serve(&flags, false).await,
-        "demo" => serve(&flags, true).await,
+        "serve" | "run" | "web" => serve(&flags).await,
         "selftest" | "test" => selftest().await,
         "import" => import(&args, &flags),
         "export" => export(&flags),
@@ -70,7 +66,7 @@ async fn main() {
         other => {
             // Peut-être un simple `zilla --port 1234`.
             if other.starts_with('-') {
-                serve(&flags, false).await;
+                serve(&flags).await;
             } else {
                 eprintln!("sous-commande inconnue : {other}\n");
                 usage();
@@ -86,23 +82,21 @@ fn usage() {
 
 \x1b[4mUsage :\x1b[0m
   zilla serve    [options]      démarre l'interface web
-  zilla demo     [options]      interface + mini-serveur FTP local
   zilla selftest                enchaîne les auto-tests client
   zilla import <fichier.xml>    importe un sitemanager.xml de FileZilla
   zilla export                  écrit ./sitemanager.xml depuis vos sites
 
 \x1b[4mOptions :\x1b[0m
-  -b, --bind <ip>        adresse d'écoute (défaut : 127.0.0.1)
+  -b, --bind <ip>        adresse d'écoute (défaut : 0.0.0.0, toutes les interfaces)
   -p, --port <port>      port d'écoute (défaut : 8734)
   -c, --config <dossier> dossier de réglages (défaut : {})
-      --root <dossier>   racine du serveur de démonstration
   -q, --quiet            n'affiche pas d'en-tête
 ",
         default_config_dir().display()
     );
 }
 
-async fn serve(flags: &Flags, demo: bool) {
+async fn serve(flags: &Flags) {
     if let Err(e) = std::fs::create_dir_all(&flags.config) {
         eprintln!("dossier de configuration inaccessible : {e}");
         std::process::exit(1);
@@ -114,8 +108,7 @@ async fn serve(flags: &Flags, demo: bool) {
             std::process::exit(1);
         }
     };
-    let public = flags.bind != "127.0.0.1" && flags.bind != "localhost";
-    let router = api::router(app.clone(), public);
+    let router = api::router(app.clone());
     let listener = match TcpListener::bind((flags.bind.as_str(), flags.port)).await {
         Ok(l) => l,
         Err(e) => {
@@ -125,36 +118,7 @@ async fn serve(flags: &Flags, demo: bool) {
     };
     let actual = listener.local_addr().map(|a| a.port()).unwrap_or(flags.port);
     if !flags.quiet {
-        banner(&flags.bind, actual, &app.token, &flags.config, demo);
-    }
-    if demo {
-        let root = if flags.root.join("demo").is_dir() {
-            flags.root.join("demo")
-        } else {
-            let d = flags.config.join("demo");
-            std::fs::create_dir_all(&d).ok();
-            seed_demo_files(&d);
-            d
-        };
-        match DemoFtp::start(&root).await {
-            Ok(d) => {
-                if !flags.quiet {
-                    println!(
-                        "  Serveur de démo : {} (dossier : {})",
-                        d.url(),
-                        root.display()
-                    );
-                }
-                app.hub.info(
-                    "general",
-                    format!("Mini-serveur FTP de démonstration démarré sur {}", d.url()),
-                );
-                std::mem::forget(d);
-            }
-            Err(e) => {
-                app.hub.err("general", format!("Serveur de démo indisponible : {e}"));
-            }
-        }
+        banner(&flags.bind, actual, &flags.config);
     }
     let app2 = app.clone();
     axum::serve(listener, router)
@@ -170,21 +134,45 @@ async fn serve(flags: &Flags, demo: bool) {
         });
 }
 
-fn banner(bind: &str, port: u16, token: &str, config: &std::path::Path, demo: bool) {
-    let host = if bind == "0.0.0.0" { "127.0.0.1" } else { bind };
+fn banner(bind: &str, port: u16, config: &std::path::Path) {
+    let exposed = bind == "0.0.0.0" || bind == "::" || bind.is_empty();
+    let lan = outbound_ip().map(|ip| ip.to_string());
+    let shown = if exposed {
+        lan.clone().unwrap_or_else(|| "127.0.0.1".to_string())
+    } else {
+        bind.to_string()
+    };
     let bar = "═".repeat(58);
     println!("  ╔{bar}╗");
-    println!("  ║  \x1b[1mZilla-RS {v}\x1b[0m — votre FileZilla, désormais dans le navigateur{d}  ║",
-        v = crate_version_padded(),
-        d = if demo { " + démo     " } else { "            " });
+    println!("  ║  \x1b[1mZilla-RS {v}\x1b[0m — votre FileZilla, désormais dans le navigateur            ║",
+        v = crate_version_padded());
     println!("  ╚{bar}╝");
-    println!("   Interface   \x1b[36mhttp://{}:{}\x1b[0m", host, port);
-    println!("   Réglages    {}", config.display());
-    if bind != "127.0.0.1" {
-        println!("   \x1b[33mJeton\x1b[0m (en-tête \x1b[2mX-Zilla-Token\x1b[0m) : {}", token);
+    if exposed {
+        println!(
+            "   Interface   \x1b[36mhttp://{}:{}\x1b[0m  \x1b[2m← accessible depuis n'importe quelle machine du réseau\x1b[0m",
+            shown, port
+        );
+        println!("   Local       http://127.0.0.1:{port}  \x1b[2mdepuis ce poste\x1b[0m");
+        println!(
+            "   Écoute      \x1b[33m{}:{}\x1b[0m  \x1b[2m(toutes les interfaces, aucun mot de passe)\x1b[0m",
+            bind, port
+        );
+    } else {
+        println!("   Interface   \x1b[36mhttp://{}:{}\x1b[0m", shown, port);
+        println!("   Écoute      {}:{}", bind, port);
     }
+    println!("   Réglages    {}", config.display());
     println!("   \x1b[2mCtrl+C pour arrêter proprement — aucune connexion ne sort de cette machine sans votre ordre.\x1b[0m\n");
     let _ = std::io::stdout().flush();
+}
+
+/// Adresse que cette machine utiliserait pour joindre l'extérieur : c'est
+/// l'adresse à laquelle le réseau local la voit. Un simple regard de routage,
+/// aucun paquet n'est envoyé.
+fn outbound_ip() -> Option<std::net::IpAddr> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect(("10.255.255.255", 53)).ok()?;
+    sock.local_addr().ok().map(|a| a.ip())
 }
 
 fn crate_version_padded() -> String {
@@ -299,29 +287,3 @@ fn export(flags: &Flags) {
     );
 }
 
-fn seed_demo_files(dir: &std::path::Path) {
-    let _ = std::fs::create_dir_all(dir.join("docs"));
-    if dir.join("bienvenue.txt").exists() {
-        return;
-    }
-    let files: [(&str, &[u8]); 6] = [
-        (
-            "bienvenue.txt",
-            "Bienvenue dans la zone de démonstration de Zilla-RS.\n\nTéléchargez, envoyez, renommez : tout est permis.".as_bytes(),
-        ),
-        ("notes.md", "# Notes\n\n- fichier texte\n- deux listes\n".as_bytes()),
-        (
-            "docs/liseuse.txt",
-            "document de démonstration dans un sous-dossier\n".as_bytes(),
-        ),
-        ("docs/rapport.csv", "id,nom,note\n1,alice,18\n2,bruno,15\n".as_bytes()),
-        (
-            "photos.svg",
-            "<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><rect width='96' height='96' rx='16' fill='#22d3ee'/><text x='48' y='60' font-size='42' text-anchor='middle' fill='#001017'>Z</text></svg>".as_bytes(),
-        ),
-        ("grosse-bille.bin", &[7u8; 200_000][..]),
-    ];
-    for (n, c) in files {
-        let _ = std::fs::write(dir.join(n), c);
-    }
-}

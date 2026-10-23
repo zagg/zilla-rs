@@ -53,7 +53,7 @@ const fmt = {
 };
 
 async function apiGet(path) {
-  const r = await fetch("/api" + path, { headers: { "x-zilla-token": token } });
+  const r = await fetch("/api" + path);
   const j = await r.json().catch(() => ({ ok: false, error: "réponse invalide" }));
   if (!j.ok) throw new Error(j.error || "erreur " + r.status);
   return j.data;
@@ -61,7 +61,7 @@ async function apiGet(path) {
 async function apiPost(path, body) {
   const r = await fetch("/api" + path, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-zilla-token": token },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
   const j = await r.json().catch(() => ({ ok: false, error: "réponse invalide" }));
@@ -100,7 +100,6 @@ function iconFor(e, local) {
 }
 
 /* ═══════════════════════════ état ═══════════════════════════ */
-let token = "";
 const S = {
   version: "",
   settings: {},
@@ -588,6 +587,7 @@ function menu(which, x, y) {
   });
   if (which === "remote") add("Ouvrir dans un onglet", () => window.open("/api/remote/file?site=" + encodeURIComponent(S.remote.site) + "&path=" + encodeURIComponent(one ? dir(one.name) : PANES.remote.path), "_blank"));
   add("Actualiser", () => (which === "local" ? loadLocal() : loadRemote()), "F5");
+  if (which === "local" && S.remote.site) add("Comparer avec le panneau distant", compareDialog, "Ctrl+Shift+C");
   add("Signer ce chemin", () => addBookmarkFor(which));
   m.style.left = Math.min(x, innerWidth - 250) + "px";
   m.style.top = Math.min(y, innerHeight - m.offsetHeight - 10) + "px";
@@ -654,7 +654,7 @@ async function dialogEditor(path, which, e) {
   let text = "";
   try {
     const url = `/api/${which === "local" ? "local" : "remote"}/file?path=${encodeURIComponent(path)}` + (which === "remote" ? `&site=${encodeURIComponent(S.remote.site)}` : "");
-    const r = await fetch(url, { headers: { "x-zilla-token": token } });
+    const r = await fetch(url);
     if (!r.ok) throw new Error(await r.text());
     text = await r.text();
   } catch (err) { return fail(err, "lecture du fichier"); }
@@ -1242,6 +1242,180 @@ function bookmarksDialog() {
 }
 async function loadBookmarks() { try { S.bookmarks = await apiGet("/bookmarks"); } catch { } }
 
+/* ═══════════════════════════ comparaison de dossiers ═══════════════════════ */
+// ------------------------------------------------------------- comparaison
+function compareDialog() {
+  if (!S.remote.site) return toast("La comparaison demande une connexion.", "warn");
+  const local = S.local.path, remote = S.remote.path;
+  let d = null;
+  const sel = new Set();
+  let mode = "diff";
+  const MX = 400;
+
+  const label = (k) =>
+    ({
+      RemoteOnly: "manquant ici",
+      LocalOnly: "absent du serveur",
+      Different: "contenu différent",
+    }[k] || k);
+
+  const seen = (i) =>
+    mode === "all"
+      ? true
+      : mode === "diff"
+      ? i.kind !== "Same"
+      : mode === "RemoteOnly"
+      ? i.kind === "RemoteOnly" || i.kind === "Different"
+      : i.kind === "LocalOnly" || i.kind === "Different";
+
+  const gap = (i) =>
+    i.kind === "Different"
+      ? `<span class="dim">${i.remote_size > i.local_size ? "↓" : "↑"} ${fmt.size(
+          Math.abs(i.remote_size - i.local_size)
+        )}</span>`
+      : i.kind === "RemoteOnly"
+      ? "<span class='dim'>↓</span>"
+      : i.kind === "LocalOnly"
+      ? "<span class='dim'>↑</span>"
+      : "";
+
+  function paint(host) {
+    const all = d.items || [];
+    const diff = all.filter((i) => i.kind !== "Same");
+    $("#cmp-same", host).textContent = d.same;
+    $("#cmp-diff", host).textContent = d.different;
+    $("#cmp-down", host).textContent = d.remote_only;
+    $("#cmp-up", host).textContent = d.local_only;
+    $("#cmp-bytes", host).innerHTML = `<span class="dim">${fmt.size(
+      d.bytes_to_download
+    )} à descendre · ${fmt.size(d.bytes_to_upload)} à monter</span>`;
+    const list = diff.filter(seen);
+    const shown = list.slice(0, MX);
+    $("#cmp-b", host).innerHTML =
+      shown
+        .map(
+          (i, n) => `<tr class="${sel.has(i.path) ? "sel" : ""}" data-n="${n}">
+       <td><input type="checkbox" ${sel.has(i.path) ? "checked" : ""}></td>
+       <td class="mono">${esc(i.path)}${i.dir ? " /" : ""}</td>
+       <td class="num mono">${esc(fmt.size(i.local_size))}</td>
+       <td class="num mono">${esc(fmt.size(i.remote_size))}</td>
+       <td>${gap(i)} <span class="dim">${label(i.kind)}</span></td></tr>`
+        )
+        .join("") ||
+      `<tr><td colspan="5" class="dim">Aucune différence : les deux arborescences concordent.</td></tr>`;
+    if (list.length > MX)
+      $("#cmp-b", host).innerHTML += `<tr><td colspan="5" class="dim">+ ${
+        list.length - MX
+      } ligne(s) de plus — filtrez pour trier.</td></tr>`;
+    $$("#cmp-b tr", host).forEach((tr) => {
+      const cb = $("input", tr);
+      if (!cb) return;
+      const it = shown[+tr.dataset.n];
+      cb.onchange = () => {
+        if (cb.checked) sel.add(it.path);
+        else sel.delete(it.path);
+        tr.classList.toggle("sel", cb.checked);
+      };
+      tr.onclick = (ev) => {
+        if (ev.target.tagName !== "INPUT") {
+          cb.checked = !cb.checked;
+          cb.onchange();
+        }
+      };
+    });
+  }
+
+  async function load(host, quiet) {
+    try {
+      d = await apiGet(
+        "/compare?site=" +
+          encodeURIComponent(S.remote.site) +
+          "&local=" +
+          encodeURIComponent(local) +
+          "&remote=" +
+          encodeURIComponent(remote)
+      );
+    } catch (e) {
+      return fail(e, "comparaison");
+    }
+    sel.clear();
+    if (!quiet) toast("Comparaison relancée.", "ok", "Comparaison");
+    paint(host);
+  }
+
+  const pick = () => {
+    const l = (d.items || []).filter((i) => i.kind !== "Same").filter(seen);
+    return sel.size ? l.filter((i) => sel.has(i.path)) : l;
+  };
+
+  const go = async (host, dir) => {
+    const items = pick();
+    if (!items.length) {
+      toast("Rien à transférer.", "warn");
+      return false;
+    }
+    try {
+      if (dir === "down") {
+        const paths = items.filter((i) => i.kind !== "LocalOnly").map((i) => joinRemote(remote, i.path));
+        if (!paths.length) {
+          toast("Aucun élément à télécharger.", "warn");
+          return false;
+        }
+        await apiPost("/download", { site: S.remote.site, paths, dir: local, dirs: true, base: remote });
+      } else {
+        const paths = items.filter((i) => i.kind !== "RemoteOnly").map((i) => joinLocal(local, i.path));
+        if (!paths.length) {
+          toast("Aucun élément à envoyer.", "warn");
+          return false;
+        }
+        await apiPost("/upload", { site: S.remote.site, paths, dir: remote, dirs: true, base: local });
+      }
+      toast(`${items.length} ligne(s) ajoutée(s) à la file.`, "ok", "Comparaison");
+      refreshQueue();
+      load(host, true);
+    } catch (e) {
+      fail(e, "transfert");
+    }
+    return false;
+  };
+
+  dialog(
+    "Comparaison des dossiers",
+    `<div class="hint">Local <span class="mono">${esc(local)}</span> ↔ distant
+       <span class="mono">${esc(remote)}</span> — on compare les deux arboresences,
+      tailles et dates comprises.</div>
+     <div class="sum">
+       <span><b id="cmp-same">…</b> identiques</span>
+       <span><b id="cmp-diff">…</b> différents</span>
+       <span><b id="cmp-down">…</b> à télécharger</span>
+       <span><b id="cmp-up">…</b> à envoyer</span>
+       <span class="grow"></span>
+       <span id="cmp-bytes"></span>
+     </div>
+     <div class="fil">Filtrer :
+       <label><input type="radio" name="cmpf" value="diff" checked> différences</label>
+       <label><input type="radio" name="cmpf" value="RemoteOnly"> à télécharger</label>
+       <label><input type="radio" name="cmpf" value="LocalOnly"> à envoyer</label>
+       <label><input type="radio" name="cmpf" value="all"> tout</label>
+       <span class="grow"></span>
+       <label><input type="checkbox" id="cmp-auto"> relire après transfert</label>
+     </div>
+     <table class="tb"><tr><th></th><th>chemin</th><th>locale</th><th>distante</th><th>écart</th></tr>
+     <tbody id="cmp-b"></tbody></table>`,
+    [
+      ["Fermer", ""],
+      ["Relire", "", (h) => (load(h, false), false)],
+      ["Télécharger les manquants", "primary", (h) => go(h, "down")],
+      ["Envoyer les manquants", "", (h) => go(h, "up")],
+    ],
+    (host) => {
+      load(host, true);
+      $$('[name="cmpf"]').forEach((r) => (r.onchange = () => ((mode = r.value), paint(host))));
+    },
+    900
+  );
+}
+
 /* ═══════════════════════════ aide ═══════════════════════════ */
 function helpDialog() {
   dialog("Aide & raccourcis", `<div style="line-height:1.7">
@@ -1299,6 +1473,7 @@ const CMDS = [
   ["Réglages", () => settingsDialog(), "Ctrl+,"],
   ["File des transferts", queueDialog, "Ctrl+Alt+T"],
   ["Signets", bookmarksDialog, ""],
+  ["Comparer les dossiers local/distant", compareDialog, "Ctrl+Shift+C"],
   ["Télécharger la sélection", () => { const s = selected("remote"); if (s.length) download(s.map((e) => joinRemote(S.remote.path, e.name)), S.local.path, true); }, "Ctrl+D"],
   ["Envoyer la sélection", () => { const s = selected("local"); if (s.length) upload(s.map((e) => joinLocal(S.local.path, e.name)), S.remote.path, true); }, "Ctrl+U"],
   ["Dossier nouveau (panneau actif)", () => mkdir(S.active), "Ctrl+Alt+D"],
@@ -1348,6 +1523,7 @@ const KEYS = {
   "Alt+1 / Alt+2": "Focus local / distant",
   "Alt+PageUp/Down": "Monter d'un cran",
   "Ctrl+Alt+T": "File des transferts",
+  "Ctrl+Shift+C": "Comparer les dossiers local/distant",
   "Ctrl+Shift+R": "Reconnecter",
   "Ctrl+Shift+D": "Déconnecter",
   "Ctrl+,": "Réglages",
@@ -1382,6 +1558,7 @@ const KEYMAP = [
   }, { noType: true }],
   ["Ctrl+Shift+R", () => reconnect()],
   ["Ctrl+Shift+D", () => disconnectCurrent()],
+  ["Ctrl+Shift+C", () => compareDialog()],
   ["Ctrl+Alt+T", () => queueDialog()],
   ["Delete", () => del(S.active), { noType: true }],
   ["F2", () => { const s = selected(S.active)[0]; if (s) rename(S.active, s); }, { noType: true }],
@@ -1601,7 +1778,6 @@ async function boot() {
     S.settings = st.settings || {};
     S.version = st.version || "";
     S.remote.path = "/";
-    token = st.token || "";
     applySettings();
     applyPaneSizes();
     let home = "/";

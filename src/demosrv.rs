@@ -106,7 +106,7 @@ async fn session(sock: TcpStream, root: PathBuf) -> std::io::Result<()> {
                 w.write_all(b"215 UNIX Type: L8\r\n").await?;
             }
             "FEAT" => {
-                let body = "211-Features:\r\n MDTM\r\n SIZE\r\n UTF8\r\n TVFS\r\n REST STREAM\r\n EPSV\r\n211 End\r\n";
+                let body = "211-Features:\r\n MDTM\r\n SIZE\r\n UTF8\r\n TVFS\r\n REST STREAM\r\n EPSV\r\n MFMT\r\n211 End\r\n";
                 w.write_all(body.as_bytes()).await?;
             }
             "NOOP" => {
@@ -212,9 +212,32 @@ async fn session(sock: TcpStream, root: PathBuf) -> std::io::Result<()> {
                             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                             .map(|d| d.as_secs() as i64)
                             .unwrap_or(0);
-                        w.write_all(format!("213{}\r\n", mlsd_time(ts)).as_bytes()).await?;
+                        w.write_all(format!("213 {}\r\n", mlsd_time(ts)).as_bytes()).await?;
                     }
                     Err(_) => w.write_all(b"550 unavailable.\r\n").await?,
+                }
+            }
+            "MFMT" => {
+                // « MFMT 20210314081200 fichier » : règlement de la date du fichier.
+                let (tsp, path) = split2(&arg);
+                let ts = chrono::NaiveDateTime::parse_from_str(tsp.trim(), "%Y%m%d%H%M%S")
+                    .map(|d| d.and_utc().timestamp())
+                    .unwrap_or(0);
+                let p = resolve(&cwd, &path);
+                let real = real_path(&root, &p);
+                match std::fs::OpenOptions::new().write(true).open(&real) {
+                    Ok(f) if ts > 0 => {
+                        let mut ft = std::fs::FileTimes::new();
+                        ft = ft.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64));
+                        match f.set_times(ft) {
+                            Ok(()) => {
+                                w.write_all(format!("250 Modify OK; mtime={}\r\n", mlsd_time(ts)).as_bytes())
+                                    .await?
+                            }
+                            Err(e) => w.write_all(format!("550 {e}\r\n").as_bytes()).await?,
+                        }
+                    }
+                    _ => w.write_all(b"550 cannot set time.\r\n").await?,
                 }
             }
             "SITE" => {
@@ -467,13 +490,20 @@ fn rwx(mode: u32, dir: bool) -> String {
 }
 
 fn ls_time(ts: i64) -> String {
-    let days = ts.div_euclid(86400);
-    let (y, m, d) = civil(days);
+    // format façon « ls -l » : « Oct 22 14:03 » ou « Oct 22  2024 » selon l'ancienneté.
     let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let mon = names.get((m as usize).saturating_sub(1) % 12).copied().unwrap_or("Jan");
+    let dt = chrono::DateTime::from_timestamp(ts, 0);
+    let (mon, d, y) = match dt {
+        Some(d) => (
+            names[d.format("%m").to_string().parse::<usize>().unwrap_or(1) - 1],
+            d.format("%d").to_string().parse::<u32>().unwrap_or(1),
+            d.format("%Y").to_string().parse::<i32>().unwrap_or(1970),
+        ),
+        None => return "Jan  1  1970".to_string(),
+    };
     let hh = ts.rem_euclid(86400) / 3600;
-    let mi = (ts.rem_euclid(3600)) / 60;
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let mi = ts.rem_euclid(3600) / 60;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|x| x.as_secs() as i64).unwrap_or(0);
     if now - ts > 365 * 86400 {
         format!("{mon} {d:>2} {y}")
     } else {
@@ -481,29 +511,11 @@ fn ls_time(ts: i64) -> String {
     }
 }
 
-fn civil(days: i64) -> (i32, u32, u32) {
-    let z = days + 719468;
-    let era = (z - if z >= 0 { 0 } else { 146096 }) / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 4;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    ((if m <= 2 { y + 1 } else { y }) as i32, m, d)
-}
-
 fn mlsd_time(ts: i64) -> String {
-    let days = ts.div_euclid(86400);
-    let (y, m, d) = civil(days);
-    let rem = ts.rem_euclid(86400);
-    format!(
-        "{y:04}{m:02}{d:02}{:02}{:02}{:02}",
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
+    // même format court que MDTM/MFMT ; chrono s'en charge sans算法 maison.
+    chrono::DateTime::from_timestamp(ts.max(0), 0)
+        .map(|d| d.format("%Y%m%d%H%M%S").to_string())
+        .unwrap_or_else(|| "19700101000000".to_string())
 }
 
 fn split2(line: &str) -> (String, String) {

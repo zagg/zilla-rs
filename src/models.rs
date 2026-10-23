@@ -399,6 +399,57 @@ pub struct Listing {
     pub truncated: bool,
 }
 
+/// Nature d'une différence entre le panneau local et le panneau distant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiffKind {
+    /// seulement présent là-bas
+    RemoteOnly,
+    /// seulement présent ici
+    LocalOnly,
+    /// les deux, mais taille ou date différente
+    Different,
+    /// identique
+    Same,
+}
+
+impl DiffKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            DiffKind::RemoteOnly => "manquant",
+            DiffKind::LocalOnly => "unique ici",
+            DiffKind::Different => "différent",
+            DiffKind::Same => "identique",
+        }
+    }
+}
+
+/// Une entrée comparée, avec les deux tailles et les deux dates.
+#[derive(Clone, Debug, Serialize)]
+pub struct DiffItem {
+    pub path: String,
+    pub kind: DiffKind,
+    pub dir: bool,
+    pub local_size: u64,
+    pub remote_size: u64,
+    pub local_mtime: i64,
+    pub remote_mtime: i64,
+}
+
+/// Résultat d'une comparaison de dossiers, comme « Comparaison des dossiers »
+/// de FileZilla.
+#[derive(Clone, Debug, Serialize)]
+pub struct CompareReport {
+    pub local: String,
+    pub remote: String,
+    pub items: Vec<DiffItem>,
+    pub same: usize,
+    pub different: usize,
+    pub local_only: usize,
+    pub remote_only: usize,
+    pub bytes_to_download: u64,
+    pub bytes_to_upload: u64,
+}
+
 /// Commande de changement d'état distante.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum RemoteOp {
@@ -499,6 +550,11 @@ pub enum JobState {
 }
 
 impl JobState {
+    /// un job terminé ne demande plus aucun travail du moteur
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, JobState::Done | JobState::Error | JobState::Cancelled)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             JobState::Waiting => "En attente",

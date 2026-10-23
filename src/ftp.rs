@@ -167,8 +167,14 @@ impl Ctrl {
             return Err(FsError::Protocol("réponse vide".into()));
         }
         let code: u16 = first[..3].parse().unwrap();
-        let cont = first.as_bytes()[3] == b'-';
-        let mut text = if first.len() > 4 { first[4..].to_string() } else { String::new() };
+        let cont = first.as_bytes().get(3).copied() == Some(b'-');
+        // Le texte démarre juste après le code ; le séparateur (espace, ou le
+        // tiret du multi-ligne) est parfois absent : on le saute sans manger
+        // le premier caractère utile de la réponse.
+        let mut text = match first.get(3..) {
+            Some(rest) => rest.trim_start_matches([' ', '-']).to_string(),
+            None => String::new(),
+        };
         if cont {
             loop {
                 let l = self.line().await?;

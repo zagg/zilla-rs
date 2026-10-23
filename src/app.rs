@@ -27,7 +27,6 @@ pub struct App {
     pub pools: SiteManager,
     pub transfers: Arc<Transfers>,
     pub started: i64,
-    pub token: String,
     pub version: &'static str,
     /// Sites crés par la connexion rapide (non enregistrés).
     ephemeral: Mutex<HashMap<String, Site>>,
@@ -55,7 +54,6 @@ impl App {
             pools: SiteManager::new(),
             transfers,
             started: now_ms(),
-            token: crate::api::new_token(),
             version,
             ephemeral: Mutex::new(HashMap::new()),
             running: AtomicBool::new(false),
@@ -335,7 +333,6 @@ impl App {
             "settings": self.settings(),
             "logs": self.hub.len(),
             "dir": self.dir.to_string_lossy(),
-            "token": self.token,
         })
     }
 
@@ -361,6 +358,183 @@ impl App {
         let l = crate::local::list(&p, show_hidden || s.general.show_hidden_local, s.transfers.follow_symlinks)?;
         self.push_recent_local(l.path.clone());
         Ok(l)
+    }
+
+    /// Compare un dossier local et un dossier distant, comme la fonction
+    /// « Comparaison des dossiers » de FileZilla. La profondeur est bornée
+    /// pour éviter de partir dans tous les sens sur une arborescence géante.
+    pub async fn compare(
+        &self,
+        site_id: &str,
+        local: &str,
+        remote: &str,
+    ) -> FsResult<crate::models::CompareReport> {
+        use crate::models::{CompareReport, DiffItem, DiffKind};
+        use std::collections::BTreeSet;
+        use std::collections::BTreeMap;
+        use std::time::UNIX_EPOCH;
+        const MAX_DEPTH: usize = 12;
+        const MAX_ITEMS: usize = 200_000;
+
+        let site = self
+            .site(site_id)
+            .ok_or_else(|| FsError::Other("site inconnu".into()))?;
+        let settings = self.settings();
+        let pool = self.pool_for(&site, &settings).await?;
+        let lease = pool
+            .lease(Duration::from_secs(settings.net.connect_timeout + 15))
+            .await?;
+        let fs = lease.fs().clone();
+
+        let mut lmap: BTreeMap<String, (u64, i64, bool)> = BTreeMap::new();
+        let base = PathBuf::from(local);
+        let mut stack: Vec<(PathBuf, usize)> = vec![(base.clone(), 0)];
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > MAX_DEPTH || lmap.len() > MAX_ITEMS {
+                continue;
+            }
+            let mut rd = match tokio::fs::read_dir(&dir).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            while let Ok(Some(de)) = rd.next_entry().await {
+                let p = de.path();
+                let relp = p
+                    .strip_prefix(&base)
+                    .map(|s| s.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                if relp.is_empty() || relp.contains("../") {
+                    continue;
+                }
+                let isdir = p.is_dir();
+                let (size, mt) = match tokio::fs::metadata(&p).await {
+                    Ok(m) => (
+                        if isdir { 0 } else { m.len() },
+                        m.modified()
+                            .map(|t| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
+                            .unwrap_or(0),
+                    ),
+                    Err(_) => (0, 0),
+                };
+                lmap.insert(relp.clone(), (size, mt, isdir));
+                if isdir {
+                    stack.push((p, depth + 1));
+                }
+            }
+        }
+
+        let mut rmap: BTreeMap<String, (u64, i64, bool)> = BTreeMap::new();
+        let mut stack: Vec<(String, String, usize)> = vec![(remote.to_string(), String::new(), 0)];
+        while let Some((dir, rel, depth)) = stack.pop() {
+            if depth > MAX_DEPTH || rmap.len() > MAX_ITEMS {
+                continue;
+            }
+            let l = match fs.list(&dir).await {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            for e in l.entries {
+                if e.kind == EntryKind::Symlink {
+                    continue;
+                }
+                let relp = if rel.is_empty() {
+                    e.name.clone()
+                } else {
+                    format!("{rel}/{}", e.name)
+                };
+                let rp = remote_join(&dir, &e.name);
+                let isdir = e.kind == EntryKind::Dir;
+                rmap.insert(relp.clone(), (e.size, e.mtime.unwrap_or(0), isdir));
+                if isdir {
+                    stack.push((rp, relp, depth + 1));
+                }
+            }
+        }
+
+        // Les dates issues d'un simple LIST ne sont qu'a la minute : une
+        //difference de quelques dizaines de secondes ne prouve rien.
+        const MTIME_SLACK: i64 = 120;
+        let mut items: Vec<DiffItem> = Vec::new();
+        let mut same = 0usize;
+        let mut different = 0usize;
+        let mut local_only = 0usize;
+        let mut remote_only = 0usize;
+        let mut to_down = 0u64;
+        let mut to_up = 0u64;
+        let keys: BTreeSet<&String> = lmap.keys().chain(rmap.keys()).collect();
+        for k in keys {
+            if k == "." || k.is_empty() {
+                continue;
+            }
+            let a = lmap.get(k);
+            let b = rmap.get(k);
+            let (kind, dir) = match (a, b) {
+                (Some(x), None) => (DiffKind::LocalOnly, x.2),
+                (None, Some(y)) => (DiffKind::RemoteOnly, y.2),
+                (None, None) => continue,
+                (Some(x), Some(y)) => {
+                    let d = x.2 || y.2;
+                    if x.2 != y.2 {
+                        (DiffKind::Different, d)
+                    } else if x.2 {
+                        (DiffKind::Same, true)
+                    } else if x.0 != y.0 || (x.1 - y.1).abs() > MTIME_SLACK {
+                        (DiffKind::Different, false)
+                    } else {
+                        (DiffKind::Same, false)
+                    }
+                }
+            };
+            let (ls, lm) = a.map(|v| (v.0, v.1)).unwrap_or((0, 0));
+            let (rs, rm) = b.map(|v| (v.0, v.1)).unwrap_or((0, 0));
+            match kind {
+                DiffKind::Same => same += 1,
+                DiffKind::Different => {
+                    different += 1;
+                    if !dir {
+                        to_down += rs;
+                        to_up += ls;
+                    }
+                }
+                DiffKind::LocalOnly => {
+                    local_only += 1;
+                    to_up += ls;
+                }
+                DiffKind::RemoteOnly => {
+                    remote_only += 1;
+                    to_down += rs;
+                }
+            }
+            items.push(DiffItem {
+                path: k.clone(),
+                kind,
+                dir,
+                local_size: ls,
+                remote_size: rs,
+                local_mtime: lm,
+                remote_mtime: rm,
+            });
+        }
+        items.sort_by(|x, y| {
+            let rank = |k: DiffKind| match k {
+                DiffKind::RemoteOnly => 3,
+                DiffKind::LocalOnly => 2,
+                DiffKind::Different => 1,
+                DiffKind::Same => 0,
+            };
+            rank(y.kind).cmp(&rank(x.kind)).then_with(|| x.path.cmp(&y.path))
+        });
+        Ok(CompareReport {
+            local: local.to_string(),
+            remote: remote.to_string(),
+            items,
+            same,
+            different,
+            local_only,
+            remote_only,
+            bytes_to_download: to_down,
+            bytes_to_upload: to_up,
+        })
     }
 
     pub async fn remote_op(&self, site_id: &str, op: RemoteOp) -> FsResult<()> {
@@ -427,11 +601,28 @@ impl App {
         local_dir: &str,
         dirs_too: bool,
     ) -> FsResult<Vec<TransferJob>> {
+        self.enqueue_download_ex(site_id, paths, local_dir, dirs_too, None).await
+    }
+
+    /// Téléchargement avec racine explicite : si `base` est fourni, le chemin
+    /// relatif sous `base` est recréé côté local (utile pour la
+    /// synchronisation d'une arborescence, comme sous FileZilla).
+    pub async fn enqueue_download_ex(
+        &self,
+        site_id: &str,
+        paths: &[String],
+        local_dir: &str,
+        dirs_too: bool,
+        base: Option<&str>,
+    ) -> FsResult<Vec<TransferJob>> {
         let site = self.site(site_id).ok_or_else(|| FsError::Other("site inconnu".into()))?;
         let settings = self.settings();
         let pool = self.pool_for(&site, &settings).await?;
         let mut jobs = Vec::new();
-        for p in paths {
+        for abs in paths {
+            // les rapports de comparaison donnent des chemins relatifs : on les
+            // cale sous `base` avant de parler au serveur
+            let p = &crate::util::under(base, abs);
             let lease = pool.lease(Duration::from_secs(settings.net.connect_timeout + 15)).await?;
             let fs = lease.fs().clone();
             let st = match fs.stat(p).await {
@@ -443,7 +634,18 @@ impl App {
             };
             if st.kind == EntryKind::Dir {
                 if dirs_too {
-                    let rel = local_join(local_dir, &st.name);
+                    let sub = match base {
+                        Some(b) => {
+                            let r = p[b.trim_end_matches('/').len()..].trim_start_matches('/');
+                            if r.is_empty() {
+                                st.name.clone()
+                            } else {
+                                r.to_string()
+                            }
+                        }
+                        None => st.name.clone(),
+                    };
+                    let rel = local_join(local_dir, &sub);
                     let mut stack = vec![(p.clone(), rel.clone())];
                     while let Some((rdir, ldir)) = stack.pop() {
                         let l = fs.list(&rdir).await?;
@@ -472,7 +674,20 @@ impl App {
                     continue;
                 }
             } else {
-                let local = remote_join(local_dir, &st.name);
+                let rel = match base {
+                    Some(b) => {
+                        let r = p[b.trim_end_matches('/').len()..].trim_start_matches('/');
+                        if r.is_empty() {
+                            st.name.clone()
+                        } else {
+                            r.to_string()
+                        }
+                    }
+                    None => st.name.clone(),
+                };
+                let local = crate::util::local_normalize(&remote_join(local_dir, &rel))
+                    .to_string_lossy()
+                    .to_string();
                 let local = crate::util::local_normalize(&local).to_string_lossy().to_string();
                 if let Some(j) = self.plan_upload(site_id, &site, p, &local, st.size, Direction::Down, &settings) {
                     jobs.push(j?);
@@ -496,12 +711,27 @@ impl App {
         remote_dir: &str,
         dirs_too: bool,
     ) -> FsResult<Vec<TransferJob>> {
+        self.enqueue_upload_ex(site_id, paths, remote_dir, dirs_too, None).await
+    }
+
+    /// Envoi avec racine explicite : la partie du chemin local sous `base` est
+    /// recréée côté serveur, ce qui préserve l'arborescence lors d'une
+    /// synchronisation.
+    pub async fn enqueue_upload_ex(
+        &self,
+        site_id: &str,
+        paths: &[String],
+        remote_dir: &str,
+        dirs_too: bool,
+        base: Option<&str>,
+    ) -> FsResult<Vec<TransferJob>> {
         let site = self.site(site_id).ok_or_else(|| FsError::Other("site inconnu".into()))?;
         let settings = self.settings();
         let pool = self.pool_for(&site, &settings).await?;
         let mut jobs = Vec::new();
-        for p in paths {
-            let path = PathBuf::from(p);
+        for abs in paths {
+            let path = PathBuf::from(crate::util::under_local(base, abs));
+            let p = &path.to_string_lossy().to_string();
             let md = tokio::fs::metadata(&path)
                 .await
                 .map_err(|e| FsError::Io(format!("{} : {e}", path.display())))?;
@@ -509,8 +739,23 @@ impl App {
                 if !dirs_too {
                     continue;
                 }
-                let base = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-                let target_dir = remote_join(remote_dir, &base);
+                let target_dir = match base {
+                    Some(b) if PathBuf::from(p).starts_with(b) => {
+                        let rel = p[b.trim_end_matches('/').len()..].trim_start_matches('/');
+                        if rel.is_empty() {
+                            remote_dir.to_string()
+                        } else {
+                            remote_join(remote_dir, rel)
+                        }
+                    }
+                    _ => {
+                        let dn = path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        remote_join(remote_dir, &dn)
+                    }
+                };
                 let mut stack: Vec<(PathBuf, String)> = vec![(path.clone(), target_dir)];
                 while let Some((dir, rdir)) = stack.pop() {
                     // crée le dossier distant, puis les entrées
@@ -546,8 +791,19 @@ impl App {
                     }
                 }
             } else {
-                let name = path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
-                let rp = remote_join(remote_dir, &name);
+                let rp = match base {
+                    Some(b) if p.starts_with(b) => {
+                        let rel = p[b.trim_end_matches('/').len()..].trim_start_matches('/');
+                        remote_join(remote_dir, rel)
+                    }
+                    _ => {
+                        let name = path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "file".into());
+                        remote_join(remote_dir, &name)
+                    }
+                };
                 if let Some(j) = self.plan_upload(site_id, &site, &rp, &path.to_string_lossy(), md.len(), Direction::Up, &settings) {
                     jobs.push(j?);
                 }

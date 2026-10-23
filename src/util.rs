@@ -309,20 +309,11 @@ pub fn stamp() -> String {
 
 /// `YYYYMMDDhhmmss` (commandes FTP MDTM/MFMT).
 pub fn fmt_yyyy_mm_dd_hhmmss(ts: i64) -> String {
-    let t = ts.max(0);
-    let days = t.div_euclid(86400);
-    let rem = t.rem_euclid(86400);
-    let z = days + 719468;
-    let era = (z - if z >= 0 { 0 } else { 146096 }) / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 4;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u64;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let yy = if m <= 2 { y + 1 } else { y };
-    format!("{yy:04}{m:02}{d:02}{:02}{:02}{:02}", rem / 3600, (rem % 3600) / 60, rem % 60)
+    // la version courte du format MDTM/MFMT (« 20250314081200 ») est directement
+    // avalée par chrono — inutile de rejouer l'algorithme des jours civils.
+    chrono::DateTime::from_timestamp(ts.max(0), 0)
+        .map(|d| d.format("%Y%m%d%H%M%S").to_string())
+        .unwrap_or_else(|| "19700101000000".to_string())
 }
 
 pub fn is_hidden_name(name: &str) -> bool {
@@ -441,6 +432,29 @@ mod idtests {
     use super::short_id;
 
     #[test]
+    fn chemins_relatifs_recales_sous_base() {
+        assert_eq!(super::under(Some("/"), "docs/a.txt"), "/docs/a.txt");
+        assert_eq!(super::under(Some("/dossier"), "a.txt"), "/dossier/a.txt");
+        assert_eq!(super::under(Some("/dossier/"), "/x/a.txt"), "/x/a.txt");
+        assert_eq!(super::under(None, "a.txt"), "a.txt");
+        assert_eq!(super::under_local(Some("/u"), "docs/b.txt"), "/u/docs/b.txt");
+        assert_eq!(super::under_local(Some("/u/"), "/tmp/b.txt"), "/tmp/b.txt");
+    }
+
+    #[test]
+    fn horodatage_mdtm() {
+        // le format envoyé en MDTM/MFMT doit être une date valide : le round-trip
+        // est le meilleur contrôle possible.
+        use crate::listparse::parse_mlsd_time;
+        for ts in [0i64, 1, 100, 1700000000, 1792707353, 4102444799, 2_147_483_647] {
+            let s = super::fmt_yyyy_mm_dd_hhmmss(ts);
+            assert_eq!(s.len(), 14, "format court : {s}");
+            assert_eq!(parse_mlsd_time(&s), Some(ts), "aller-retour raté pour {ts} → {s}");
+        }
+        assert_eq!(super::fmt_yyyy_mm_dd_hhmmss(-5), "19700101000000");
+    }
+
+    #[test]
     fn identifiants_uniques() {
         let mut v = Vec::new();
         for _ in 0..5000 {
@@ -451,5 +465,23 @@ mod idtests {
         sorted.dedup();
         assert_eq!(sorted.len(), v.len(), "deux identifiants identiques ont été générés");
         assert!(v.iter().all(|s| s.len() == 8));
+    }
+}
+
+/// cale `p` sous `base` si `p` est relatif (chemin distant)
+pub fn under(base: Option<&str>, p: &str) -> String {
+    match base {
+        Some(b) if !p.starts_with('/') => remote_join(b, p),
+        _ => p.to_string(),
+    }
+}
+
+/// meme chose pour les chemins locaux
+pub fn under_local(base: Option<&str>, p: &str) -> String {
+    match base {
+        Some(b) if !p.starts_with('/') && !(p.as_bytes().len() > 1 && &p[1..2] == ":") => {
+            format!("{}/{}", b.trim_end_matches('/'), p)
+        }
+        _ => p.to_string(),
     }
 }

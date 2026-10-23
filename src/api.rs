@@ -21,13 +21,7 @@ const APP_JS: &str = include_str!("../web/app.js");
 const APP_CSS: &str = include_str!("../web/app.css");
 const ICON: &str = include_str!("../web/icon.svg");
 
-pub fn new_token() -> String {
-    let mut t = format!("{:x}", rand::random::<u64>());
-    t.push_str(&format!("{:x}", rand::random::<u64>()));
-    t
-}
-
-pub fn router(app: Arc<App>, public: bool) -> Router {
+pub fn router(app: Arc<App>) -> Router {
     let api = Router::new()
         .route("/status", get(status))
         .route("/settings", get(get_settings).post(update_settings))
@@ -52,6 +46,7 @@ pub fn router(app: Arc<App>, public: bool) -> Router {
         .route("/remote/save", post(remote_save))
         .route("/remote/search", get(remote_search))
         .route("/remote/exists", get(remote_exists))
+        .route("/compare", get(compare_dirs))
         .route("/local/list", get(local_list))
         .route("/local/op", post(local_op))
         .route("/local/file", get(local_file))
@@ -71,42 +66,15 @@ pub fn router(app: Arc<App>, public: bool) -> Router {
         .route("/selftest", get(selftest));
     let api = Router::new().nest("/api", api);
 
-    let token_for_guard = app.token.clone();
     let pages = Router::new()
         .route("/", get(index))
         .route("/app.css", get(css))
         .route("/app.js", get(js))
         .route("/icon.svg", get(icon))
         .route("/favicon.ico", get(icon))
-        .route("/_ws", get(ws_handler))
-        .layer(axum::middleware::from_fn(move |req, next| guard(req, next, token_for_guard.clone(), public)));
+        .route("/_ws", get(ws_handler));
 
     pages.merge(api).with_state(app.clone()).fallback(not_found)
-}
-
-async fn guard(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-    token: String,
-    public: bool,
-) -> Response {
-    let path = req.uri().path().to_string();
-    if path.starts_with("/api/") && public {
-        let ok = req
-            .headers()
-            .get("x-zilla-token")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v == token)
-            .unwrap_or(false);
-        if !ok {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "jeter requis — passez --bind 127.0.0.1 ou fournissez x-zilla-token"})),
-            )
-                .into_response();
-        }
-    }
-    next.run(req).await
 }
 
 fn err(e: impl std::fmt::Display) -> Response {
@@ -410,6 +378,20 @@ struct RemoteOpBody {
     op: RemoteOp,
 }
 
+#[derive(Deserialize)]
+struct CompareQ {
+    site: String,
+    local: String,
+    remote: String,
+}
+
+async fn compare_dirs(State(app): State<Arc<App>>, Query(q): Query<CompareQ>) -> Response {
+    match app.compare(&q.site, &q.local, &q.remote).await {
+        Ok(r) => ok(r),
+        Err(e) => err(e),
+    }
+}
+
 async fn remote_op(State(app): State<Arc<App>>, Json(b): Json<RemoteOpBody>) -> Response {
     match app.remote_op(&b.site, b.op).await {
         Ok(()) => ok(json!(true)),
@@ -699,17 +681,20 @@ struct EnqueueBody {
     dir: String,
     #[serde(default)]
     dirs: bool,
+    /// racine commune des chemins, pour conserver l'arborescence (synchro)
+    #[serde(default)]
+    base: Option<String>,
 }
 
 async fn enqueue_download(State(app): State<Arc<App>>, Json(b): Json<EnqueueBody>) -> Response {
-    match app.enqueue_download(&b.site, &b.paths, &b.dir, b.dirs).await {
+    match app.enqueue_download_ex(&b.site, &b.paths, &b.dir, b.dirs, b.base.as_deref()).await {
         Ok(jobs) => ok(json!({ "added": b.paths.len(), "jobs": jobs })),
         Err(e) => err(e),
     }
 }
 
 async fn enqueue_upload(State(app): State<Arc<App>>, Json(b): Json<EnqueueBody>) -> Response {
-    match app.enqueue_upload(&b.site, &b.paths, &b.dir, b.dirs).await {
+    match app.enqueue_upload_ex(&b.site, &b.paths, &b.dir, b.dirs, b.base.as_deref()).await {
         Ok(jobs) => ok(json!({ "added": b.paths.len(), "jobs": jobs })),
         Err(e) => err(e),
     }

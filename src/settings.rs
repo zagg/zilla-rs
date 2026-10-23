@@ -174,7 +174,7 @@ impl Default for Ftp {
             site_chown: false,
             site_utime: false,
             use_mdtm: true,
-            use_mfmt: false,
+            use_mfmt: true,
             pre_connect: Vec::new(),
             tls_protection: true,
         }

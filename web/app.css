@@ -388,3 +388,10 @@ table.tb td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .empty button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
 .empty button.link:hover { color: var(--accent-2); }
+
+/* bandeaux de dialogue (comparaison, listes) */
+.hint { color: var(--fg-dim); font-size: 11.5px; margin-bottom: 6px; }
+.sum { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 12px; margin-bottom: 8px; }
+.sum .grow { flex: 1; }
+.fil { font-size: 11.5px; color: var(--fg-dim); margin-bottom: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
+.fil label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
