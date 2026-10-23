@@ -596,6 +596,11 @@ pub struct TransferJob {
     pub attempts: u32,
     pub path_chain: String,
     pub resume_from: u64,
+    /// Dernier instant où le moteur a vu des octets avancer. Sert de garde-fou :
+    /// un canal qui se tait sans rendre les armes laisserait sinon le créneau
+    /// du parc occupé jusqu'au redémarrage du service.
+    #[serde(default, skip)]
+    pub last_step: i64,
     #[serde(default)]
     pub kind: EntryKind,
 }
@@ -686,6 +691,7 @@ impl TransferJob {
             attempts: 0,
             path_chain: String::new(),
             resume_from: 0,
+            last_step: 0,
             kind: EntryKind::File,
         }
     }

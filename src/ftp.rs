@@ -106,6 +106,10 @@ pub struct Ctrl {
     pub epsv: bool,
     pub banner: String,
     pub mlsd_types: bool,
+    /// né à true quand le fil de contrôle a lâché (silence, fin de flux, panne
+    /// réseau). Sans ça, le parc gardait une connexion morte à portée de main
+    /// et chaque listage repartait pour un délai complet.
+    pub morte: Arc<AtomicBool>,
 }
 
 impl Ctrl {
@@ -117,14 +121,19 @@ impl Ctrl {
         let mut tmp = [0u8; 1024];
         let n = match tokio::time::timeout(self.cfg.timeout(), self.sock.read(&mut tmp)).await {
             Ok(Ok(n)) => n,
-            Ok(Err(e)) => return Err(FsError::Io(e.to_string())),
+            Ok(Err(e)) => {
+                self.morte.store(true, Ordering::Relaxed);
+                return Err(FsError::Io(e.to_string()));
+            }
             Err(_) => {
+                self.morte.store(true, Ordering::Relaxed);
                 return Err(FsError::Timeout(
                     "aucune réponse du serveur sur le fil de contrôle".into(),
-                ))
+                ));
             }
         };
         if n == 0 {
+            self.morte.store(true, Ordering::Relaxed);
             return Err(FsError::Closed);
         }
         self.buf.extend_from_slice(&tmp[..n]);
@@ -374,6 +383,13 @@ pub struct FtpFs {
     pub hub: Arc<LogHub>,
     id: String,
     closed: AtomicBool,
+    morte: Arc<AtomicBool>,
+    /// Un canal de transfert refermé sans avoir lu sa réponse de fin de
+    /// transfert laisse un reliquat dans le fil de contrôle : la commande
+    /// d'après lirait ce reliquat à la place de sa propre réponse. On tient
+    /// comptable de la dette, et la place est nettemment reprise plutôt que
+    /// repeuplée en secret.
+    sale: Arc<AtomicBool>,
     last_used: AtomicI64,
     #[allow(dead_code)]
     created: i64,
@@ -407,6 +423,7 @@ impl FtpFs {
         hub.status("Connection established, waiting for welcome message…");
         let mut sock = net::connect(&cfg.host, cfg.port, settings, hub).await?;
         sock.nodelay();
+        let morte = Arc::new(AtomicBool::new(false));
 
         let mut ctrl = Ctrl {
             sock,
@@ -414,6 +431,7 @@ impl FtpFs {
             pos: 0,
             cfg: cfg.clone(),
             hub: hub.clone(),
+            morte: morte.clone(),
             cwd: None,
             features: HashSet::new(),
             sys: String::new(),
@@ -619,6 +637,8 @@ impl FtpFs {
             hub: hub.clone(),
             id,
             closed: AtomicBool::new(false),
+            morte,
+            sale: Arc::new(AtomicBool::new(false)),
             last_used: AtomicI64::new(now_ms()),
             created: now_ms(),
             tls: AtomicBool::new(tls_on),
@@ -937,13 +957,32 @@ impl RemoteFs for FtpFs {
                 Ok(mut sock) => {
                     let mut buf: Vec<u8> = Vec::new();
                     let mut tmp = vec![0u8; 16384];
+                    // un canal de liste qui se tait sans rien dire ne doit pas
+                    // tenir le fil de contrôle en haleine : sans cette borne le
+                    // listage s'endort pour de bon — et tous les suivants avec
+                    // lui, le verrou de la connexion étant retenu par un sommeil
+                    let muet = {
+                        let s = self.cfg_snapshot();
+                        if s.net.data_timeout > 0 {
+                            Duration::from_secs(s.net.data_timeout)
+                        } else {
+                            Duration::from_secs(s.net.response_timeout.max(20))
+                        }
+                    };
                     loop {
-                        match sock.read(&mut tmp).await {
-                            Ok(0) => break,
-                            Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                            Err(e) => {
+                        match tokio::time::timeout(muet, sock.read(&mut tmp)).await {
+                            Ok(Ok(0)) => break,
+                            Ok(Ok(n)) => buf.extend_from_slice(&tmp[..n]),
+                            Ok(Err(e)) => {
                                 let _ = sock.close().await;
                                 return Err(FsError::Io(e.to_string()));
+                            }
+                            Err(_) => {
+                                let _ = sock.close().await;
+                                return Err(FsError::Timeout(format!(
+                                    "le canal de liste s'est tu pendant {} s",
+                                    muet.as_secs()
+                                )));
                             }
                         }
                     }
@@ -1191,6 +1230,7 @@ impl RemoteFs for FtpFs {
             data: Some(sock),
             ctrl: self.ctrl.clone(),
             done: false,
+            sale: self.sale.clone(),
         }))
     }
 
@@ -1204,6 +1244,7 @@ impl RemoteFs for FtpFs {
             return Ok(Box::new(FtpSink {
                 data: Some(sock),
                 ctrl: self.ctrl.clone(),
+                sale: self.sale.clone(),
             }));
         }
         if offset > 0 {
@@ -1216,6 +1257,7 @@ impl RemoteFs for FtpFs {
                 return Ok(Box::new(FtpSink {
                     data: Some(sock),
                     ctrl: self.ctrl.clone(),
+                    sale: self.sale.clone(),
                 }));
             }
         }
@@ -1226,6 +1268,7 @@ impl RemoteFs for FtpFs {
         Ok(Box::new(FtpSink {
             data: Some(sock),
             ctrl: self.ctrl.clone(),
+            sale: self.sale.clone(),
         }))
     }
 
@@ -1263,6 +1306,8 @@ impl RemoteFs for FtpFs {
 
     fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)
+            || self.morte.load(Ordering::Relaxed)
+            || self.sale.load(Ordering::Relaxed)
     }
 
     fn last_used(&self) -> i64 {
@@ -1290,6 +1335,18 @@ struct FtpSrc {
     data: Option<Sock>,
     ctrl: Arc<AsyncMutex<Ctrl>>,
     done: bool,
+    sale: Arc<AtomicBool>,
+}
+
+/// Un canal de données qu'on referme sans avoir entendu sa réponse, c'est une
+/// dette dans le fil de contrôle : à partir de là la connexion ne dit plus
+/// rien de sûr, et la place doit être reprise plutôt que rendue sale.
+impl Drop for FtpSrc {
+    fn drop(&mut self) {
+        if self.data.is_some() && !self.done {
+            self.sale.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 #[async_trait]
@@ -1318,7 +1375,14 @@ impl Src for FtpSrc {
         }
         self.done = true;
         let mut c = self.ctrl.lock().await;
-        match FtpFs::finish(&mut c).await {
+        let rendu = FtpFs::finish(&mut c).await;
+        if rendu.is_err() {
+            // rien n'a été lu : la commande d'après lirait ce reliquat à la
+            // place de sa propre réponse, et plus personne ne sait ce que vaut
+            // cette connexion
+            self.sale.store(true, Ordering::Relaxed);
+        }
+        match rendu {
             Ok(()) => Ok(()),
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
         }
@@ -1329,6 +1393,15 @@ impl Src for FtpSrc {
 struct FtpSink {
     data: Option<Sock>,
     ctrl: Arc<AsyncMutex<Ctrl>>,
+    sale: Arc<AtomicBool>,
+}
+
+impl Drop for FtpSink {
+    fn drop(&mut self) {
+        if self.data.is_some() {
+            self.sale.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 #[async_trait]
@@ -1346,7 +1419,13 @@ impl Sink for FtpSink {
             drop(s);
         }
         let mut c = self.ctrl.lock().await;
-        match FtpFs::finish(&mut c).await {
+        let rendu = FtpFs::finish(&mut c).await;
+        if rendu.is_err() {
+            // la réponse de fin de transfert est restée dans le fil : même dette
+            // que ci-dessus, la place doit être reprise
+            self.sale.store(true, Ordering::Relaxed);
+        }
+        match rendu {
             Ok(()) => Ok(()),
             Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
         }

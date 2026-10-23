@@ -409,6 +409,26 @@ impl Pool {
     }
 
     pub fn reap_idle_now(&self) {
+        // d'abord les connexions qui ont rendu l'âme : sans ce ménage leur
+        // créneau reste plein alors qu'elles ne servent plus, le vecteur
+        // grossit à chaque incident, et la place est repeuplée en double
+        {
+            let mut slots = self.slots.write().unwrap();
+            let morts: Vec<usize> = slots
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.as_ref().map(|c| c.fs.is_closed() && !c.is_busy()).unwrap_or(false))
+                .map(|(i, _)| i)
+                .collect();
+            for i in morts {
+                if let Some(c) = slots[i].take() {
+                    let fs = c.fs.clone();
+                    tokio::spawn(async move {
+                        fs.shutdown().await;
+                    });
+                }
+            }
+        }
         let slots: Vec<Arc<RemoteConn>> = self
             .slots
             .read()
