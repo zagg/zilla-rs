@@ -765,11 +765,10 @@ function renderQueue(jobs) {
   const list = $("#list-queue");
   const tous = S.queue.jobs;
   /* une ligne terminée n'a plus rien à faire dans la liste d'attente : on la
-     retire du panneau, mais on la garde sous la main pour la relire. */
+     retire du volet, mais on la garde sous la main pour la relire. */
   const cache = S.queue.showDone ? [] : tous.filter((t) => t.state === "done");
   const j = S.queue.showDone ? tous : tous.filter((t) => t.state !== "done");
-  const head = `<div class="col">Nom</div><div class="col">État</div><div class="col">Progression</div>`;
-  $("#cols-queue").innerHTML = `<div class="col" style="grid-column:1">Nom</div><div class="col">État</div><div class="col">Progression</div>`;
+  $("#cols-queue").innerHTML = `<div class="col" style="grid-column:1">Nom</div><div class="col">État</div><div class="col">Progression</div><div class="col">Transféré</div>`;
   const rows = j.map((t) => {
     const pct = t.size ? Math.min(100, (t.transferred / t.size) * 100) : 0;
     const name = (t.remote || "").split("/").pop() || t.local.split("/").pop();
@@ -777,17 +776,23 @@ function renderQueue(jobs) {
     const st = t.state === "active" ? `${fmt.speed(t.speed)} · ${fmt.dur((Date.now() - t.started) / 1000)}` :
       t.state === "done" ? "terminé" : t.state === "error" ? "échec" : t.state === "paused" ? "pause" : t.state === "cancelled" ? "annulé" : "en attente";
     const cls = t.state === "done" ? "ok" : t.state === "error" ? "err" : "";
-    return `<div class="r" data-id="${esc(t.id)}" title="${esc(t.remote)}">
-      <div class="c name"><span>${dir}</span><span>${esc(name)}</span></div>
+    return `<div class="r" data-id="${esc(t.id)}" title="${esc(t.remote)} ${esc(t.local)}">
+      <div class="c name"><span>${dir}</span><span>${esc(name)}</span><span class="dim">${esc(t.site_name || "")}</span></div>
       <div class="c dim">${esc(st)}</div>
-      <div class="c"><div class="bar ${cls}"><i style="width:${pct.toFixed(1)}%"></i></div>
-      <div class="dim" style="font-size:10.5px">${fmt.size(t.transferred)} / ${fmt.size(t.size)}</div></div></div>`;
+      <div class="c"><div class="bar ${cls}"><i style="width:${pct.toFixed(1)}%"></i></div></div>
+      <div class="c num dim">${fmt.size(t.transferred)} / ${fmt.size(t.size)}</div></div>`;
   }).join("");
   list.innerHTML = rows || `<div class="empty">${cache.length ? "Rien en attente — les lignes terminées sont masquées." : "File vide.<br>Sélectionnez puis Ctrl+Entrée."}</div>`;
   const s = S.queue.stats || {};
+  const enRoute = (s.pending || 0) + (s.active || 0);
   const badge = $("#queue-badge");
-  badge.textContent = String((s.pending || 0) + (s.active || 0));
+  badge.textContent = String(enRoute);
   badge.style.display = badge.textContent === "0" ? "none" : "";
+  const compte = $("#tq-count");
+  if (compte) {
+    compte.textContent = String(enRoute);
+    compte.classList.toggle("hidden", enRoute === 0);
+  }
   $("#q-stats").innerHTML = `${s.active || 0} en cours · ${s.pending || 0} en attente · ${s.done || 0} terminés · ${s.failed || 0} échoués` +
     (s.bytes_per_sec ? ` · <b>${fmt.speed(s.bytes_per_sec)}</b>` : "") +
     (s.paused ? ` · <span class="warn">en pause</span>` : "") +
@@ -798,6 +803,29 @@ function renderQueue(jobs) {
   const hd = $("#q-hide-done");
   if (hd) hd.onclick = () => { S.queue.showDone = false; store.set("queue.showDone", false); renderQueue(); };
   $("#st-speed").innerHTML = s.bytes_per_sec ? `débit ${fmt.speed(s.bytes_per_sec)}` : "";
+}
+
+/* l'onglet « Transferts » du volet du bas n'est plus une ligne du journal :
+   il montre la file, barres comprises, là où le volet du milieu la montrait */
+function voletTransferts(actif = S.log.cat === "transfers") {
+  const tq = $("#transfer-view"), journal = $("#log"), outils = $("#tq-tools");
+  if (tq) tq.classList.toggle("hidden", !actif);
+  if (journal) journal.style.display = actif ? "none" : "";
+  if (outils) outils.classList.toggle("hidden", !actif);
+  if (actif) refreshQueue();
+}
+
+/* plus de volet au milieu : un bouton, un raccourci, et la file s'affiche
+   là où elle se voit déjà — le volet du bas */
+function montrerFile() {
+  const w = $("#logwrap");
+  if (w.classList.contains("hidden")) {
+    w.classList.remove("hidden");
+    if (S.settings.ui) S.settings.ui.show_message_pane = true;
+    apiPost("/settings", { ui: { show_message_pane: true } });
+  }
+  const t = $('.logtabs .tab[data-log="transfers"]');
+  if (t) t.click(); else voletTransferts(true);
 }
 listQueueEvents();
 function listQueueEvents() {
@@ -1195,7 +1223,7 @@ function tabBody(k, s) {
       return `<fieldset><legend>Panneaux</legend>
         ${B("Afficher les barres d'outils", "ui.show_toolbar", g?.show_toolbar)}
         ${B("Afficher le journal", "ui.show_message_pane", g?.show_message_pane)}
-        ${B("Afficher le volet des transferts", "ui.show_transfer_pane", g?.show_transfer_pane)}
+        ${B("Afficher l'onglet des transferts (volet du bas)", "ui.show_transfer_pane", g?.show_transfer_pane)}
         ${B("Afficher la barre de statut", "ui.show_statusbar", g?.show_statusbar)}
         <div class="field wide"><label>Colonnes locales</label><input name="ui.local_columns" value="${esc((g?.local_columns || []).join(","))}" class="mono"></div>
         <div class="field wide"><label>Colonnes distantes</label><input name="ui.remote_columns" value="${esc((g?.remote_columns || []).join(","))}" class="mono"></div>
@@ -1267,8 +1295,15 @@ function applySettings(force = false) {
   document.documentElement.style.setProperty("--fs", (g.font_size || 13) + "px");
   $("#logwrap").classList.toggle("hidden", u.show_message_pane === false);
   $("#toolbar").style.display = u.show_toolbar === false ? "none" : "";
-  const q = $("#pane-queue");
-  if (q) q.style.display = u.show_transfer_pane === false ? "none" : "";
+  const ongletFile = $('.logtabs .tab[data-log="transfers"]');
+  if (ongletFile) {
+    const montre = u.show_transfer_pane !== false;
+    ongletFile.style.display = montre ? "" : "none";
+    if (!montre && S.log.cat === "transfers") {
+      const tous = $('.logtabs .tab[data-log="all"]');
+      if (tous) tous.click();
+    }
+  }
   $("#st-speed").parentElement.style.display = u.show_statusbar === false ? "none" : "";
   S.log.verbose = S.settings.logs?.level === "verbose";
   $("#log-verbose").checked = S.log.verbose;
@@ -1580,7 +1615,8 @@ const CMDS = [
   ["Rechercher des fichiers", () => searchDialog(S.active), "Ctrl+F"],
   ["Rechercher une commande", () => palette(), "Ctrl+K"],
   ["Réglages", () => settingsDialog(), "Ctrl+,"],
-  ["File des transferts", queueDialog, "Ctrl+Alt+T"],
+  ["File des transferts", montrerFile, "Ctrl+Alt+T"],
+  ["File des transferts (fenêtre détaillée)", queueDialog, ""],
   ["Signets", bookmarksDialog, ""],
   ["Comparer les dossiers local/distant", compareDialog, "Ctrl+Shift+C"],
   ["Télécharger la sélection", () => { const s = selected("remote"); if (s.length) download(s.map((e) => joinRemote(S.remote.path, e.name)), S.local.path, true); }, "Ctrl+D"],
@@ -1668,7 +1704,7 @@ const KEYMAP = [
   ["Ctrl+Shift+R", () => reconnect()],
   ["Ctrl+Shift+D", () => disconnectCurrent()],
   ["Ctrl+Shift+C", () => compareDialog()],
-  ["Ctrl+Alt+T", () => queueDialog()],
+  ["Ctrl+Alt+T", () => montrerFile()],
   ["Delete", () => del(S.active), { noType: true }],
   ["F2", () => { const s = selected(S.active)[0]; if (s) rename(S.active, s); }, { noType: true }],
   ["Enter", () => { const s = selected(S.active)[0]; if (s) open(S.active, s); }, { noType: true }],
@@ -1786,38 +1822,28 @@ function wsConnect() {
 /* ═══════════════════════════ gouttières / taille ═══════════════════════════ */
 function bindGutters() {
   const panes = $("#panes");
-  [["#g1", "g1"], ["#g2", "g2"]].forEach(([id]) => {
-    const g = $(id);
-    g.addEventListener("mousedown", (ev) => {
-      ev.preventDefault();
-      g.classList.add("drag");
-      const mv = (e) => {
-        const rects = [...document.querySelectorAll(".pane")].map((p) => p.getBoundingClientRect().left);
-        // arbitre entre les panneaux
-        const x = e.clientX;
-        const lp = $("#pane-local"), rp = $("#pane-remote");
-        if (id === "#g1") {
-          const w = Math.max(160, Math.min(panes.clientWidth - 460, x - rects[0]));
-          lp.style.flex = `0 0 ${w}px`;
-        } else {
-          const w = Math.max(180, Math.min(panes.clientWidth - 460, x - lp.getBoundingClientRect().right - (168 + 10)));
-          $("#pane-queue").style.flex = `0 0 ${w}px`;
-        }
-      };
-      const up = () => { g.classList.remove("drag"); removeEventListener("mousemove", mv); removeEventListener("mouseup", up); store.set("panes", paneSizes()); };
-      addEventListener("mousemove", mv);
-      addEventListener("mouseup", up);
-    });
+  const g = $("#g1");
+  if (!g) return;
+  g.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+    g.classList.add("drag");
+    const mv = (e) => {
+      const x = e.clientX, lp = $("#pane-local");
+      const w = Math.max(160, Math.min(panes.clientWidth - 260, x - lp.getBoundingClientRect().left));
+      lp.style.flex = `0 0 ${w}px`;
+    };
+    const up = () => { g.classList.remove("drag"); removeEventListener("mousemove", mv); removeEventListener("mouseup", up); store.set("panes", paneSizes()); };
+    addEventListener("mousemove", mv);
+    addEventListener("mouseup", up);
   });
 }
 function paneSizes() {
-  return { l: $("#pane-local").style.flex, q: $("#pane-queue").style.flex };
+  return { l: $("#pane-local").style.flex };
 }
 function applyPaneSizes() {
   const p = store.get("panes", null);
   if (!p) return;
   if (p.l) $("#pane-local").style.flex = p.l;
-  if (p.q) $("#pane-queue").style.flex = p.q;
 }
 function bindLogResize() {
   const g = $("#log-grip"), w = $("#logwrap");
@@ -1841,7 +1867,7 @@ function bindChrome() {
   $("#btn-disconnect").onclick = disconnectCurrent;
   $("#btn-reconnect").onclick = reconnect;
   $("#btn-both-refresh").onclick = refreshAll;
-  $("#btn-queue").onclick = queueDialog;
+  $("#btn-queue").onclick = montrerFile;
   $("#btn-search").onclick = () => searchDialog(S.active);
   $("#btn-bookmarks").onclick = bookmarksDialog;
   $("#btn-palette").onclick = palette;
@@ -1867,7 +1893,7 @@ function bindChrome() {
   $("#log-clear").onclick = () => { apiPost("/log/clear", {}); S.log.lines = []; renderLog(); };
   $("#log-save").onclick = () => window.open("/api/log/save", "_blank");
   $("#log-verbose").onchange = (e) => { S.log.verbose = e.target.checked; renderLog(); };
-  $$(".logtabs .tab").forEach((t) => t.onclick = () => { $$(".logtabs .tab").forEach((x) => x.classList.remove("active")); t.classList.add("active"); S.log.cat = t.dataset.log; renderLog(); });
+  $$(".logtabs .tab").forEach((t) => t.onclick = () => { $$(".logtabs .tab").forEach((x) => x.classList.remove("active")); t.classList.add("active"); S.log.cat = t.dataset.log; voletTransferts(t.dataset.log === "transfers"); renderLog(); });
   $("#log").addEventListener("wheel", (e) => { $("#log").dataset.dir = e.deltaY > 0 ? "down" : "up"; }, { passive: true });
   $("#st-info").onclick = async () => {
     const d = await apiGet("/connections");
@@ -1889,6 +1915,7 @@ async function boot() {
     S.remote.path = "/";
     applySettings();
     applyPaneSizes();
+    voletTransferts();
     let home = "/";
     try { const rr = await apiGet("/local/roots"); home = rr.home || (rr.roots[0] && rr.roots[0].path) || "/"; } catch { }
     await loadLocal(home);

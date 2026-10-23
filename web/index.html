@@ -99,21 +99,6 @@
 
     <div class="gutter" id="g1"></div>
 
-    <section class="pane queuepane" id="pane-queue" tabindex="0">
-      <div class="pane-head">
-        <span class="pane-title">Transferts</span>
-        <span class="grow"></span>
-        <button class="btn mini" id="q-pause" title="Pause">⏸</button>
-        <button class="btn mini" id="q-clear" title="Effacer les terminés">🧹</button>
-        <button class="btn mini" id="q-more" title="Ouvrir la fenêtre détaillée">⤢</button>
-      </div>
-      <div class="cols cols-queue" id="cols-queue"></div>
-      <div class="list list-queue" id="list-queue"></div>
-      <div class="q-stats" id="q-stats"></div>
-    </section>
-
-    <div class="gutter" id="g2"></div>
-
     <section class="pane" id="pane-remote" tabindex="0" data-pane="remote">
       <div class="pane-head">
         <span class="pane-title">Distant</span>
@@ -128,23 +113,33 @@
     </section>
   </main>
 
-  <!-- Journal -->
+  <!-- Journal et file des transferts -->
   <div class="logwrap" id="logwrap">
     <div class="logtabs row">
       <div class="tabs">
         <button class="tab active" data-log="all">Tous</button>
         <button class="tab" data-log="server">Serveur</button>
         <button class="tab" data-log="file">Fichiers</button>
-        <button class="tab" data-log="transfers">Transferts</button>
+        <button class="tab" data-log="transfers">Transferts <span class="pill hidden" id="tq-count">0</span></button>
         <button class="tab" data-log="status">Statut</button>
       </div>
       <span class="grow"></span>
+      <span class="tq-tools hidden" id="tq-tools">
+        <button class="btn mini" id="q-pause" title="Pause sur la file">⏸</button>
+        <button class="btn mini" id="q-clear" title="Effacer les terminés">🧹</button>
+        <button class="btn mini" id="q-more" title="Ouvrir la fenêtre détaillée">⤢</button>
+      </span>
       <label class="mini-label"><input type="checkbox" id="log-verbose"> détail</label>
       <button class="btn mini" id="log-clear" title="Vider le journal">🗑</button>
       <button class="btn mini" id="log-save" title="Enregistrer le journal">💾</button>
       <button class="grip" id="log-grip" title="Redimensionner">≡</button>
     </div>
     <div class="log" id="log"></div>
+    <div class="tq hidden" id="transfer-view">
+      <div class="cols cols-queue" id="cols-queue"></div>
+      <div class="list list-queue" id="list-queue"></div>
+      <div class="q-stats" id="q-stats"></div>
+    </div>
   </div>
 
   <!-- Barre de statut -->

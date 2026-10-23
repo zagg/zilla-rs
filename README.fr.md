@@ -41,6 +41,8 @@ transferts, journal que l'on lit vraiment — tout en étant :
   reçu ou lâché un fichier est redemandé sur-le-champ, sans attendre la sonde
 - Une ligne terminée s'efface de la file d'attente ; le décompte reste au bandeau
   et un clic la rend pour la relire
+- La file tient dans le volet du bas, sous l'onglet « Transferts », et plus entre
+  les deux panneaux de fichiers — les deux panneaux gardent toute la largeur
 
 **Gestionnaire de sites**
 - Groupes imbriqués, réglages par site (délais, commandes, niveau TLS, mode d'identification)

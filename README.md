@@ -41,6 +41,8 @@ being:
   lost) a file is re-listed straight away, without waiting for the page's poll
 - A finished row leaves the waiting list; the tally stays on the strip and one
   click brings the folded rows back
+- The queue lives in the bottom strip under the "Transferts" tab instead of
+  between the two file panes, so both panes keep the full width
 
 **Site manager**
 - Nested groups, per-site overrides (timeouts, commands, TLS level, logintype)
