@@ -87,9 +87,29 @@ const IC = {
   media: '<svg viewBox="0 0 24 24" class="ic"><rect x="3" y="5" width="18" height="14" rx="2" fill="#22d3ee"/><path fill="#083344" d="M10 9l6 3-6 3z"/></svg>',
   up: '<svg viewBox="0 0 24 24" class="ic"><path fill="#34d399" d="M12 3l6 7h-4v6h-4v-6H6z"/></svg>',
 };
+/* ════════════════════════ genres d'entrée ════════════════════════ */
+/* Le serveur renvoie « dir » | « file » | « symlink » | « other ». On tolère
+   au passage d'autres écritures (casse haute, « directory », « link ») pour
+   qu'un vieux listing ou un autre fournisseur ne fasse pas planter la
+   navigation : un dossier doit rester un dossier, sinon le double-clic
+   ne transfère plus rien et n'ouvre plus le répertoire. */
+function normKind(k) {
+  const s = String(k || "").toLowerCase();
+  if (s === "dir" || s === "directory") return "dir";
+  if (s === "link" || s === "symlink") return "symlink";
+  if (s === "file" || s === "f") return "file";
+  return s || "file";
+}
+const isDir = (e) => normKind(e && e.kind) === "dir";
+const isLink = (e) => normKind(e && e.kind) === "symlink" || !!(e && e.link);
+function normEntries(list) {
+  for (const e of (list || [])) e.kind = normKind(e.kind);
+  return list || [];
+}
+
 function iconFor(e, local) {
-  if (e.kind === "dir") return IC.dir;
-  if (e.kind === "link" || e.link) return IC.link;
+  if (isDir(e)) return IC.dir;
+  if (isLink(e)) return IC.link;
   const ext = (e.name.split(".").pop() || "").toLowerCase();
   if (["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico"].includes(ext)) return IC.img;
   if (["zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "iso"].includes(ext)) return IC.arch;
@@ -182,10 +202,10 @@ function gridTemplate(which) {
 function cellText(which, col, e) {
   switch (col) {
     case "name": return e.name;
-    case "size": return e.kind === "dir" ? "" : fmt.size(e.size);
-    case "type": return e.kind === "dir" ? "Répertoire" : e.kind === "link" || e.link ? "Lien" : "Fichier";
+    case "size": return isDir(e) ? "" : fmt.size(e.size);
+    case "type": return isDir(e) ? "Répertoire" : isLink(e) ? "Lien" : "Fichier";
     case "modified": return fmt.date(e.mtime);
-    case "perm": return e.mode != null ? perms(e.mode, e.kind === "dir") : "";
+    case "perm": return e.mode != null ? perms(e.mode, isDir(e)) : "";
     case "user": return e.user || "";
     case "group": return e.group || "";
   }
@@ -206,12 +226,12 @@ function filtered(which) {
   const k = p.sort.key, desc = p.sort.desc ? -1 : 1;
   v.sort((a, b) => {
     if (p.dirsFirst) {
-      if (a.kind === "dir" && b.kind !== "dir") return -1;
-      if (a.kind !== "dir" && b.kind === "dir") return 1;
+      if (isDir(a) && !isDir(b)) return -1;
+      if (!isDir(a) && isDir(b)) return 1;
     }
     let r = 0;
     if (k === "size") r = (a.size || 0) - (b.size || 0);
-    else if (k === "type") r = (a.kind || "").localeCompare(b.kind || "");
+    else if (k === "type") r = (normKind(a.kind) || "").localeCompare(normKind(b.kind) || "");
     else if (k === "modified") r = (a.mtime || 0) - (b.mtime || 0);
     else if (k === "perm") r = (a.mode || 0) - (b.mode || 0);
     else if (k === "user" || k === "group") r = (a[k] || "").localeCompare(b[k] || "");
@@ -234,7 +254,7 @@ function renderPane(which) {
     const e = v[i];
     const idx = p.entries.indexOf(e);
     const sel = p.sel.has(e.name);
-    const cls = ["r", e.kind === "dir" ? "dir" : e.kind === "link" || e.link ? "link" : "", e.hidden ? "hidden" : "", sel ? "sel" : ""].filter(Boolean).join(" ");
+    const cls = ["r", isDir(e) ? "dir" : isLink(e) ? "link" : "", e.hidden ? "hidden" : "", sel ? "sel" : ""].filter(Boolean).join(" ");
     const cells = cs.map((c) => {
       const t = cellText(which, c, e);
       if (c === "name") return `<div class="c name">${iconFor(e, which === "local")}<span>${esc(t)}</span>${e.link ? `<span class="dim">→ ${esc(e.link)}</span>` : ""}</div>`;
@@ -256,10 +276,10 @@ function renderPane(which) {
 function status(which) {
   const p = PANES[which];
   const v = filtered(which);
-  const files = v.filter((e) => e.kind !== "dir");
+  const files = v.filter((e) => !isDir(e));
   const bytes = files.reduce((a, e) => a + (e.size || 0), 0);
   const filt = p.filter ? ` · ${v.length}/${p.entries.length} affichés` : "";
-  const txt = `<b>${esc(p.path || "/")}</b> — ${v.filter((e) => e.kind === "dir").length} dossier(s), ${files.length} fichier(s), ${fmt.size(bytes)}${filt}`;
+  const txt = `<b>${esc(p.path || "/")}</b> — ${v.filter(isDir).length} dossier(s), ${files.length} fichier(s), ${fmt.size(bytes)}${filt}`;
   $(which === "local" ? "#st-local" : "#st-remote").innerHTML = txt;
   const crumbs = $("#crumbs-" + which);
   crumbs.innerHTML = (which === "local" ? localCrumbs(p.path) : remoteCrumbs(p.path)).join("");
@@ -295,7 +315,7 @@ async function loadLocal(path = S.local.path) {
   try {
     const d = await apiGet("/local/list?path=" + encodeURIComponent(path) + "&hidden=" + (S.settings.general?.show_hidden_local ? "true" : "false"));
     S.local.path = d.path;
-    S.local.entries = d.entries || [];
+    S.local.entries = normEntries(d.entries || []);
     keepSel(S.local);
     renderPane("local");
     if (S.active === "local") $("#pane-local").scrollTop = 0;
@@ -306,7 +326,7 @@ async function loadRemote(path = S.remote.path, quiet = false) {
   try {
     const d = await apiGet(`/remote/list?site=${encodeURIComponent(S.remote.site)}&path=` + encodeURIComponent(path));
     S.remote.path = d.path;
-    S.remote.entries = d.entries || [];
+    S.remote.entries = normEntries(d.entries || []);
     S.remote.connected = true;
     keepSel(S.remote);
     renderPane("remote");
@@ -323,6 +343,35 @@ function keepSel(p) {
 function selected(which) {
   const p = PANES[which];
   return p.entries.filter((e) => p.sel.has(e.name));
+}
+
+/* La liste est entièrement revue à chaque rendu : entre les deux clics d'un
+   double-clic, le nœud touché peut avoir été remplacé. On retrouve donc
+   l'entrée par son nom, quitte à refaire un pointage visuel. */
+function rowOf(which, ev) {
+  const list = $("#list-" + which);
+  let row = ev.target && ev.target.closest ? ev.target.closest(".r") : null;
+  if (row && !list.contains(row)) row = null;
+  if (!row && (ev.clientX || ev.clientY) && typeof document.elementFromPoint === "function") {
+    const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+    row = hit && hit.closest ? hit.closest(".r") : null;
+    if (row && !list.contains(row)) row = null;
+  }
+  return row;
+}
+function entryOf(which, ev) {
+  const p = PANES[which];
+  const row = rowOf(which, ev);
+  if (!row) return null;
+  const byIdx = p.entries[+row.dataset.idx];
+  if (byIdx && byIdx.name === row.dataset.name) return byIdx;
+  return p.entries.find((x) => x.name === row.dataset.name) || null;
+}
+/* Ne retouche que la surbrillance : le DOM reste stable, le double-clic garde
+   son nœud vivant et le défilement ne saute pas. */
+function paintSel(which) {
+  const p = PANES[which];
+  for (const row of $("#list-" + which).querySelectorAll(".r")) row.classList.toggle("sel", p.sel.has(row.dataset.name));
 }
 
 /* navigation */
@@ -346,11 +395,9 @@ function bindPane(which) {
   const list = $("#list-" + which);
   pane.addEventListener("mousedown", () => { S.active = which; pane.focus(); });
   list.addEventListener("click", (ev) => {
-    const row = ev.target.closest(".r");
-    if (!row) return;
-    const p = PANES[which];
-    const e = p.entries[+row.dataset.idx];
+    const e = entryOf(which, ev);
     if (!e) return;
+    const p = PANES[which];
     const items = filtered(which);
     if (ev.ctrlKey || ev.metaKey) {
       p.sel.has(e.name) ? p.sel.delete(e.name) : p.sel.add(e.name);
@@ -362,26 +409,24 @@ function bindPane(which) {
       p.sel = new Set([e.name]);
       p.anchor = e.name;
     }
-    renderPane(which);
+    paintSel(which);
   });
   list.addEventListener("dblclick", (ev) => {
-    const row = ev.target.closest(".r"); if (!row) return;
-    const e = PANES[which].entries[+row.dataset.idx]; if (e) open(which, e);
+    const e = entryOf(which, ev); if (e) open(which, e);
   });
   list.addEventListener("contextmenu", (ev) => {
     ev.preventDefault();
     const p = PANES[which];
-    const row = ev.target.closest(".r");
-    if (row) {
-      const e = p.entries[+row.dataset.idx];
-      if (e && !p.sel.has(e.name)) { p.sel = new Set([e.name]); renderPane(which); }
+    const e = entryOf(which, ev);
+    if (e) {
+      if (!p.sel.has(e.name)) { p.sel = new Set([e.name]); renderPane(which); }
     } else p.sel.clear();
     menu(which, ev.clientX, ev.clientY);
   });
   list.addEventListener("dragstart", (ev) => {
-    const row = ev.target.closest(".r"); if (!row) return;
     const p = PANES[which];
-    const e = p.entries[+row.dataset.idx];
+    const e = entryOf(which, ev);
+    if (!e) return;
     if (!p.sel.has(e.name)) { p.sel = new Set([e.name]); renderPane(which); }
     const names = [...p.sel];
     const base = which === "local" ? p.path : p.path;
@@ -455,7 +500,7 @@ function joinRemote(base, name) { return (base === "/" ? "" : base) + "/" + name
 /* ═══════════════════════════ opérations ═══════════════════════════ */
 function open(which, e) {
   const mode = (S.settings.general && S.settings.general.double_click) || "transfer";
-  if (e.kind === "dir") return goto(which, joinRemote(PANES[which].path, e.name));
+  if (isDir(e)) return goto(which, joinRemote(PANES[which].path, e.name));
   if (mode === "view") return view(which, e);
   if (which === "local") return upload([joinLocal(PANES.local.path, e.name)], S.remote.path, true);
   return download([e.path || joinRemote(S.remote.path, e.name)], S.local.path, true);
@@ -522,7 +567,7 @@ async function del(which) {
   try {
     for (const e of items) {
       if (which === "local") await apiPost("/local/op", { op: { kind: "remove", path: joinLocal(PANES.local.path, e.name), recursive: true } });
-      else await apiPost("/remote/op", { site: S.remote.site, op: e.kind === "dir" ? { Rmdir: joinRemote(PANES.remote.path, e.name) } : { Remove: joinRemote(PANES.remote.path, e.name) } });
+      else await apiPost("/remote/op", { site: S.remote.site, op: isDir(e) ? { Rmdir: joinRemote(PANES.remote.path, e.name) } : { Remove: joinRemote(PANES.remote.path, e.name) } });
     }
     toast(`${n} élément(s) supprimé(s).`, "ok");
     which === "local" ? loadLocal() : loadRemote();
@@ -563,7 +608,7 @@ function menu(which, x, y) {
     m.appendChild(i);
   };
   if (one) add("Ouvrir", () => open(which, one), "Entrée");
-  if (one && one.kind !== "dir") add("Voir / éditer", () => view(which, one), "Ctrl+I");
+  if (one && !isDir(one)) add("Voir / éditer", () => view(which, one), "Ctrl+I");
   if (items.length) {
     add(which === "local" ? "Téléverser vers le serveur" : "Télécharger vers le disque", () => (which === "local" ? upload(items.map((e) => dir(e.name)), S.remote.path, true) : download(items.map((e) => dir(e.name)), S.local.path, true)), "Ctrl+Entrée");
     add("Ajouter à la file (dossiers compris)", () => (which === "local" ? upload(items.map((e) => dir(e.name)), S.remote.path, true) : download(items.map((e) => dir(e.name)), S.local.path, true)), "Ctrl+T");
@@ -600,10 +645,10 @@ addEventListener("contextmenu", (e) => { if (!e.target.closest(".list")) closeMe
 function properties(which, e) {
   const path = joinLocal(PANES.local.path, e.name);
   dialog("Propriétés", `<div class="field"><label>Emplacement</label><div class="mono">${esc(path)}</div></div>
-    <div class="field"><label>Type</label><div>${esc(e.kind === "dir" ? "répertoire" : "fichier")}</div></div>
+    <div class="field"><label>Type</label><div>${esc(isDir(e) ? "répertoire" : isLink(e) ? "lien" : "fichier")}</div></div>
     <div class="field"><label>Taille</label><div>${esc(fmt.size(e.size))}</div></div>
     <div class="field"><label>Modifié</label><div>${esc(fmt.date(e.mtime))} (${e.mtime ? new Date(e.mtime * 1000).toLocaleString("fr-FR") : "—"})</div></div>
-    <div class="field"><label>Permissions</label><div class="mono">${esc(e.mode != null ? perms(e.mode, e.kind === "dir") : "—")}</div></div>
+    <div class="field"><label>Permissions</label><div class="mono">${esc(e.mode != null ? perms(e.mode, isDir(e)) : "—")}</div></div>
     <div class="field"><label>Propriétaire</label><div>${esc((e.user || "?") + ":" + (e.group || "?"))}</div></div>`,
     [["Fermer", "close"]]);
 }
@@ -1153,13 +1198,23 @@ function parsePatch(root) {
 }
 async function saveSettings(root) {
   const patch = parsePatch(root);
+  const cachésAvant = !!(S.settings.general || {}).show_hidden_local;
   try {
     S.settings = await apiPost("/settings", patch);
-    applySettings();
+    applySettings(true);
+    /* les cachés, ça ne se trie pas à l'écran : c'est le listing qui les fait apparaître */
+    if (!!(S.settings.general || {}).show_hidden_local !== cachésAvant) await loadLocal(S.local.path).catch(() => { });
     toast("Réglages enregistrés.", "ok");
   } catch (e) { fail(e, "réglages"); return false; }
 }
-function applySettings() {
+let visuel = null;
+function visuelSig() {
+  const g = S.settings.general || {}, u = S.settings.ui || {};
+  return JSON.stringify([g.theme, g.font_size, g.show_hidden_local, g.show_hidden_remote,
+    u.show_toolbar, u.show_message_pane, u.show_transfer_pane, u.show_statusbar, S.log.verbose, S.cols,
+    S.local.sort, S.remote.sort, S.local.dirsFirst, S.remote.dirsFirst]);
+}
+function applySettings(force = false) {
   const g = S.settings.general || {}, u = S.settings.ui || {};
   document.body.className = (g.theme === "light" ? "theme-light" : "theme-dark");
   document.documentElement.style.setProperty("--fs", (g.font_size || 13) + "px");
@@ -1170,7 +1225,13 @@ function applySettings() {
   $("#st-speed").parentElement.style.display = u.show_statusbar === false ? "none" : "";
   S.log.verbose = S.settings.logs?.level === "verbose";
   $("#log-verbose").checked = S.log.verbose;
-  renderPane("local"); renderPane("remote");
+  /* Le reste se joue en CSS et dans les listes déjà sous la main : refaire
+     les deux panneaux à chaque message du serveur (ou toutes les 12 s à
+     la revue de statut) remplace les lignes sous le curseur, et un
+     double-clic qui tombe là-dedans ne trouve plus sa proie. On ne
+     rerend que si le visuel a réellement remué. */
+  const sig = visuelSig();
+  if (force || sig !== visuel) { visuel = sig; renderPane("local"); renderPane("remote"); }
 }
 
 /* ═══════════════════════════ recherche ═══════════════════════════ */
@@ -1187,9 +1248,10 @@ function searchDialog(scope = "local") {
   const go = async () => {
     const sc = $("#sc-scope").value, r = $("#sc-root").value, p = $("#sc-pat").value;
     try {
-      const d = sc === "local"
+      const found = sc === "local"
         ? await apiGet(`/local/search?root=${encodeURIComponent(r)}&pattern=${encodeURIComponent(p)}&max=400`)
         : await apiGet(`/remote/search?site=${encodeURIComponent(S.remote.site || "")}&root=${encodeURIComponent(r)}&pattern=${encodeURIComponent(p)}&max=400`);
+      const d = normEntries(found || []);
       window._search = { data: d, scope: sc };
       const tb = $("#sc-tb tbody");
       tb.innerHTML = (d || []).map((e, i) => `<tr data-i="${i}"><td>${esc(e.name)}</td><td class="num">${fmt.size(e.size)}</td><td>${fmt.date(e.mtime)}</td><td class="dim mono">${esc(e.path || "")}</td></tr>`).join("") || `<tr><td colspan="4" class="dim">aucun résultat</td></tr>`;

@@ -299,12 +299,20 @@ impl Default for Site {
 }
 
 /// Types d'entrées retournés par un listing.
+/// Le fil est *minuscule* sur le réseau (`"dir"`, `"file"`, …), attendu par
+/// l'interface web ; les formes `"Dir"`/`"File"` restent acceptées en lecture
+/// pour tolérer les réglages et caches écrits par les versions antérieures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum EntryKind {
     #[default]
+    #[serde(alias = "File")]
     File,
+    #[serde(alias = "Dir")]
     Dir,
+    #[serde(alias = "Symlink")]
     Symlink,
+    #[serde(alias = "Other")]
     Other,
 }
 
