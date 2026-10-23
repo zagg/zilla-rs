@@ -196,6 +196,8 @@ button, input, select { font: inherit; color: inherit; }
 .queuepane { flex: 0 0 260px; }
 .list-queue .r { grid-template-columns: 1fr 74px 84px !important; }
 .q-stats { border-top: 1px solid var(--line2); padding: 4px 8px; font-size: 11px; color: var(--fg-dim); display: flex; gap: 10px; flex-wrap: wrap; }
+.qlink { color: var(--accent); text-decoration: underline; cursor: pointer; }
+.qlink:hover { color: var(--fg); text-decoration: none; }
 .bar { height: 3px; background: var(--line2); border-radius: 2px; overflow: hidden; margin-top: 2px; }
 .bar > i { display: block; height: 100%; background: var(--accent); transition: width .25s; }
 .bar.ok > i { background: var(--ok); }

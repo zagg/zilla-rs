@@ -630,6 +630,7 @@ impl FtpFs {
             since: now_ms(),
             hostkey_fp: String::new(),
             features: ctrl.features.iter().cloned().collect(),
+            server_dir: ctrl.cwd.clone().unwrap_or_else(|| "/".into()),
         };
         let tls_on = ctrl.tls;
         let fs = FtpFs {

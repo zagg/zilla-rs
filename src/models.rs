@@ -494,6 +494,11 @@ pub struct ConnInfo {
     pub hostkey_fp: String,
     #[serde(default)]
     pub features: Vec<String>,
+    /// Répertoire distant où le panneau doit s'ouvrir au départ : le chemin
+    /// demandé par le site quand il en demande un, sinon le chemin d'attache
+    /// du serveur. Sans lui, le gestionnaire de sites n'aurait servi à rien.
+    #[serde(default)]
+    pub server_dir: String,
 }
 
 impl ConnInfo {

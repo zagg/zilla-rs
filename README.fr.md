@@ -37,9 +37,16 @@ transferts, journal que l'on lit vraiment — tout en étant :
 - Priorités, limitation de bande passante, pause/reprise/annulation/essai à nouveau
 - Reprise (`REST`), stratégies écraser/passer/plus récent/rebaptiser, préservation des dates (`MDTM`/`MFMT`)
 - Récursion de dossiers, persistance de la file, notification de fin de file
+- Les deux panneaux sont prévenus dès qu'une ligne se termine : le dossier qui a
+  reçu ou lâché un fichier est redemandé sur-le-champ, sans attendre la sonde
+- Une ligne terminée s'efface de la file d'attente ; le décompte reste au bandeau
+  et un clic la rend pour la relire
 
 **Gestionnaire de sites**
 - Groupes imbriqués, réglages par site (délais, commandes, niveau TLS, mode d'identification)
+- Au branchement, le panneau distant s'ouvre sur le répertoire demandé par le site
+  (`/` laisse le serveur choisir) et le panneau local sur son `Répertoire local` :
+  c'est là que les téléchargements atterrissent
 - Import/export XML compatible FileZilla
 - Connexion rapide, sites récents, favoris
 

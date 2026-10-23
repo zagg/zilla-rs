@@ -325,7 +325,15 @@ async fn connect(State(app): State<Arc<App>>, Json(b): Json<ConnectBody>) -> Res
     if let Some(id) = &b.site_id {
         return match app.site(id) {
             Some(site) => match app.connect(&site).await {
-                Ok(info) => ok(info),
+                Ok(info) => {
+                    // le panneau local aussi a son mot à dire : le dossier
+                    // gardé au site dit où l'on atterrit en local
+                    let mut v = serde_json::to_value(&info).unwrap_or_else(|_| json!({}));
+                    if let Some(o) = v.as_object_mut() {
+                        o.insert("local_dir".into(), json!(site.local_dir));
+                    }
+                    ok(v)
+                }
                 Err(e) => err(e),
             },
             None => err("site introuvable"),

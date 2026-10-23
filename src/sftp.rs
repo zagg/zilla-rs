@@ -307,6 +307,7 @@ impl SftpFs {
             since: now_ms(),
             hostkey_fp: fp,
             features: vec!["SFTP".into()],
+            server_dir: cwd.clone(),
         };
         Ok(SftpFs {
             sftp,

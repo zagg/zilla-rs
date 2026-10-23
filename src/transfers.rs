@@ -593,39 +593,62 @@ impl Transfers {
     }
 
     fn complete(&self, id: &str, n: u64) {
-        let mut q = self.queue.lock().unwrap();
-        if q.abandoned.contains(id) {
-            return;
-        }
-        if let Some(j) = q.jobs.iter_mut().find(|j| j.id == id) {
-            if j.state == JobState::Cancelled {
+        let mut panneau: Option<&'static str> = None;
+        {
+            let mut q = self.queue.lock().unwrap();
+            if q.abandoned.contains(id) {
                 return;
             }
-            j.transferred = n;
-            j.state = JobState::Done;
-            j.finished = now_ms();
-            j.speed = 0.0;
-            j.error.clear();
+            if let Some(j) = q.jobs.iter_mut().find(|j| j.id == id) {
+                if j.state == JobState::Cancelled {
+                    return;
+                }
+                j.transferred = n;
+                j.state = JobState::Done;
+                j.finished = now_ms();
+                j.speed = 0.0;
+                j.error.clear();
+                // le dossier qui vient de recevoir le fichier n'a plus le
+                // même visage : c'est au panneau d'en face d'en être averti
+                // le premier, pas à la prochaine sonde de la page
+                panneau = Some(if j.direction == Direction::Up {
+                    "remote"
+                } else {
+                    "local"
+                });
+            }
         }
+        if let Some(p) = panneau {
+            self.hub.publish(Event::dirty(p));
+        }
+        self.hub.publish(Event::dirty("queue"));
     }
 
     pub fn fail(&self, id: &str, e: &str) {
-        let (skip, annule) = {
+        let (skip, annule, panneau) = {
             let mut q = self.queue.lock().unwrap();
             if q.abandoned.contains(id) {
-                (true, false)
+                (true, false, None)
             } else if let Some(j) = q.jobs.iter_mut().find(|j| j.id == id) {
                 if j.state == JobState::Cancelled {
-                    (false, true)
+                    (false, true, None)
                 } else {
                     j.state = JobState::Error;
                     j.error = e.to_string();
                     j.finished = now_ms();
                     j.speed = 0.0;
-                    (false, false)
+                    (
+                        false,
+                        false,
+                        Some(if j.direction == Direction::Up {
+                            "remote"
+                        } else {
+                            "local"
+                        }),
+                    )
                 }
             } else {
-                (false, false)
+                (false, false, None)
             }
         };
         if skip {
@@ -634,6 +657,11 @@ impl Transfers {
         if annule {
             self.hub.info("transfers", format!("La ligne était déjà à la poubelle : {e}"));
             return;
+        }
+        // un demi-fichier écrit quelque part, cela aussi se voit dans le
+        // panneau qui l'a reçu
+        if let Some(p) = panneau {
+            self.hub.publish(Event::dirty(p));
         }
         self.hub.err("transfers", e.to_string());
         self.hub.publish(crate::hub::Event::job_done(id, false, e));

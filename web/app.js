@@ -20,6 +20,20 @@ const el = (tag, attrs = {}, ...kids) => {
 };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const debounce = (fn, ms = 260) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+/* le premier signal file sur-le-champ, les suivants font la queue derrière
+   lui : une poignée de dossiers qui bougent reste fraîche sans mitrailler le
+   disque, et une ligne finie se montre sans qu'on ait à la demander */
+const throttle = (fn, ms = 400) => {
+  let dernier = 0, queue = null;
+  return (...a) => {
+    const maintenant = Date.now();
+    if (maintenant - dernier >= ms) { dernier = maintenant; fn(...a); }
+    else {
+      clearTimeout(queue);
+      queue = setTimeout(() => { dernier = Date.now(); fn(...a); }, Math.max(1, ms - (maintenant - dernier)));
+    }
+  };
+};
 
 const fmt = {
   size(n) {
@@ -125,7 +139,7 @@ const S = {
   settings: {},
   sites: [],
   connected: {},
-  queue: { jobs: [], stats: {} },
+  queue: { jobs: [], stats: {}, showDone: store.get("queue.showDone", false) },
   local: { path: "/", entries: [], sel: new Set(), sort: { key: "name", desc: false }, filter: "", dirsFirst: true },
   remote: { site: null, path: "/", entries: [], sel: new Set(), sort: { key: "name", desc: false }, filter: "", dirsFirst: true, connected: false, info: null },
   active: "local",
@@ -311,7 +325,7 @@ function remoteCrumbs(path) {
 }
 
 /* chargement */
-async function loadLocal(path = S.local.path) {
+async function loadLocal(path = S.local.path, quiet = false) {
   try {
     const d = await apiGet("/local/list?path=" + encodeURIComponent(path) + "&hidden=" + (S.settings.general?.show_hidden_local ? "true" : "false"));
     S.local.path = d.path;
@@ -319,7 +333,13 @@ async function loadLocal(path = S.local.path) {
     keepSel(S.local);
     renderPane("local");
     if (S.active === "local") $("#pane-local").scrollTop = 0;
-  } catch (e) { fail(e, "répertoire local"); }
+    return true;
+  } catch (e) {
+    // `quiet` : on cherche un endroit que le site a écrit. S'il n'y est pas,
+    // ce n'est pas une faute, on le dit une fois, sans gueuler.
+    if (!quiet) fail(e, "répertoire local");
+    return false;
+  }
 }
 async function loadRemote(path = S.remote.path, quiet = false) {
   if (!S.remote.site) return;
@@ -336,6 +356,11 @@ async function loadRemote(path = S.remote.path, quiet = false) {
     throw e;
   }
 }
+/* un transfert qui se termine fait bouger un dossier : on le redemande, mais
+   en rangeant les signaux qui arrivent par grappes derrière le premier. */
+const revoirLocal = throttle(() => { loadLocal(S.local.path).catch(() => { }); }, 400);
+const revoirDistant = throttle(() => { if (S.remote.connected) loadRemote(S.remote.path, true).catch(() => { }); }, 400);
+
 function keepSel(p) {
   const names = new Set(p.entries.map((e) => e.name));
   p.sel = new Set([...p.sel].filter((n) => names.has(n)));
@@ -738,7 +763,11 @@ function dialogMedia(path, url, kind) {
 function renderQueue(jobs) {
   if (jobs) S.queue.jobs = jobs;
   const list = $("#list-queue");
-  const j = S.queue.jobs;
+  const tous = S.queue.jobs;
+  /* une ligne terminée n'a plus rien à faire dans la liste d'attente : on la
+     retire du panneau, mais on la garde sous la main pour la relire. */
+  const cache = S.queue.showDone ? [] : tous.filter((t) => t.state === "done");
+  const j = S.queue.showDone ? tous : tous.filter((t) => t.state !== "done");
   const head = `<div class="col">Nom</div><div class="col">État</div><div class="col">Progression</div>`;
   $("#cols-queue").innerHTML = `<div class="col" style="grid-column:1">Nom</div><div class="col">État</div><div class="col">Progression</div>`;
   const rows = j.map((t) => {
@@ -754,14 +783,20 @@ function renderQueue(jobs) {
       <div class="c"><div class="bar ${cls}"><i style="width:${pct.toFixed(1)}%"></i></div>
       <div class="dim" style="font-size:10.5px">${fmt.size(t.transferred)} / ${fmt.size(t.size)}</div></div></div>`;
   }).join("");
-  list.innerHTML = rows || `<div class="empty">File vide.<br>Sélectionnez puis Ctrl+Entrée.</div>`;
+  list.innerHTML = rows || `<div class="empty">${cache.length ? "Rien en attente — les lignes terminées sont masquées." : "File vide.<br>Sélectionnez puis Ctrl+Entrée."}</div>`;
   const s = S.queue.stats || {};
   const badge = $("#queue-badge");
   badge.textContent = String((s.pending || 0) + (s.active || 0));
   badge.style.display = badge.textContent === "0" ? "none" : "";
   $("#q-stats").innerHTML = `${s.active || 0} en cours · ${s.pending || 0} en attente · ${s.done || 0} terminés · ${s.failed || 0} échoués` +
     (s.bytes_per_sec ? ` · <b>${fmt.speed(s.bytes_per_sec)}</b>` : "") +
-    (s.paused ? ` · <span class="warn">en pause</span>` : "");
+    (s.paused ? ` · <span class="warn">en pause</span>` : "") +
+    (cache.length ? ` · <span class="qlink" id="q-show-done">${cache.length} terminé(s) masqué(s)</span>` : "") +
+    (S.queue.showDone ? ` · <span class="qlink" id="q-hide-done">les masquer</span>` : "");
+  const sd = $("#q-show-done");
+  if (sd) sd.onclick = () => { S.queue.showDone = true; store.set("queue.showDone", true); renderQueue(); };
+  const hd = $("#q-hide-done");
+  if (hd) hd.onclick = () => { S.queue.showDone = false; store.set("queue.showDone", false); renderQueue(); };
   $("#st-speed").innerHTML = s.bytes_per_sec ? `débit ${fmt.speed(s.bytes_per_sec)}` : "";
 }
 listQueueEvents();
@@ -796,7 +831,12 @@ function listQueueEvents() {
   $("#q-more").onclick = queueDialog;
 }
 async function refreshQueue() {
-  try { const d = await apiGet("/transfers"); renderQueue(d.jobs.filter((j) => j.state !== "cancelled")); S.queue.stats = d.stats; renderQueue(); } catch (e) { }
+  try {
+    const d = await apiGet("/transfers");
+    S.queue.jobs = d.jobs.filter((j) => j.state !== "cancelled");
+    S.queue.stats = d.stats;
+    renderQueue();
+  } catch (e) { }
 }
 function queueDialog() {
   const cols = `<tr><th data-k="name">Nom</th><th data-k="dir">Sens</th><th data-k="state">État</th><th data-k="size">Taille</th><th data-k="prog">Progression</th><th data-k="spd">Vitesse</th><th data-k="site">Site</th></tr>`;
@@ -844,7 +884,14 @@ async function connectTo(siteId) {
     S.remote.site = siteId;
     S.remote.connected = true;
     toast("Connecté à " + (d.host || ""), "ok", "Connexion");
-    await loadRemote(d.server_dir || "/");
+    /* le site dit où l'on va de chaque côté : le panneau distant prend le
+       chemin que le serveur a bien voulu annoncer, le panneau local celui que
+       le gestionnaire de sites garde pour lui */
+    await loadRemote(d.server_dir || "/", true);
+    const site = (S.sites || []).find((x) => x.id === siteId);
+    const local = d.local_dir || (site && site.local_dir) || "";
+    if (local && !(await loadLocal(local, true)))
+      toast("Dossier local du site introuvable : " + local, "warn");
     refreshStatus();
     return true;
   } catch (e) { fail(e, "connexion"); return false; }
@@ -862,7 +909,7 @@ async function quickConnect() {
     S.remote.site = d.site_id;
     S.remote.connected = true;
     toast("Connecté.", "ok", "Connexion");
-    await loadRemote("/");
+    await loadRemote((d.info && d.info.server_dir) || "/", true);
     refreshStatus();
     loadRecents();
   } catch (e) { fail(e, "connexion rapide"); }
@@ -938,8 +985,8 @@ function siteForm(id) {
       <div class="field"><label>Clé privée (SFTP)</label><input name="keyfile" value="${esc(s.keyfile || "")}" placeholder="~/.ssh/id_ed25519"><div class="hint">la passphrase n'est pas requise si la clé est sans mot de passe</div></div>
     </fieldset>
     <fieldset><legend>Répertoires</legend>
-      <div class="field"><label>Répertoire distant</label><input name="remote_dir" value="${esc(s.remote_dir || "/")}"></div>
-      <div class="field"><label>Répertoire local</label><input name="local_dir" value="${esc(s.local_dir || "")}"></div>
+      <div class="field"><label>Répertoire distant</label><input name="remote_dir" value="${esc(s.remote_dir || "/")}"><div class="hint">où le panneau distant s'installe à la connexion — « / » laisse le serveur choisir</div></div>
+      <div class="field"><label>Répertoire local</label><input name="local_dir" value="${esc(s.local_dir || "")}" placeholder="ex. /home/moi/téléchargements"><div class="hint">où le panneau local s'installe à la connexion ; c'est là que les téléchargements atterrissent</div></div>
     </fieldset>
     <fieldset><legend>Avancé</legend>
       <div class="field"><label>Limiter les connexions</label><div class="inline"><input type="checkbox" name="limit_connections" ${s.limit_connections ? "checked" : ""}> <input name="max_connections" value="${esc(s.max_connections ?? 10)}" style="width:70px"> <span class="dim">max. simultanées</span></div></div>
@@ -1718,8 +1765,8 @@ function wsConnect() {
       if (m.data.what === "queue") refreshQueue();
       else if (m.data.what === "connections") refreshStatus();
       else if (m.data.what === "sites") loadSites().then(renderSiteTree);
-      else if (m.data.what === "local") loadLocal(S.local.path);
-      else if (m.data.what === "remote") if (S.remote.connected) loadRemote(S.remote.path, true);
+      else if (m.data.what === "local") revoirLocal();
+      else if (m.data.what === "remote") revoirDistant();
     } else if (m.kind === "status") {
       const d = m.status || m.data;
       if (d) { S.queue.stats = d.transfers || S.queue.stats; S.connected = Object.fromEntries((d.connections || []).map((c) => [c.site_id, c])); renderQueue(); renderConnections(); }

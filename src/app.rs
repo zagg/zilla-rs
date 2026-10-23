@@ -197,18 +197,39 @@ impl App {
         let _t = std::time::Instant::now();
         let pool = self.pool_for(site, &settings).await?;
         let fs = pool.browse(Duration::from_secs(settings.net.connect_timeout + 10)).await?;
-        let info = fs.info().await;
+        let mut info = fs.info().await;
+        // Le « répertoire distant par défaut » du site n'est pas une
+        // décoration : c'est là que le panneau doit s'ouvrir, sinon le
+        // gestionnaire de sites n'aurait jamais servi à quelque chose.
+        let wanted = site.remote_dir.trim().trim_end_matches('/');
+        let wanted = if wanted.is_empty() { "/" } else { wanted };
+        let mut start = "/".to_string();
+        if wanted != "/" {
+            match fs.stat(wanted).await {
+                Ok(e) if e.kind == EntryKind::File => self.hub.warn(
+                    "connect",
+                    format!("Le répertoire du site est un fichier : {wanted} — départ à la racine"),
+                ),
+                Ok(_) => {
+                    // un chemin absolu se suffit à lui-même : le `real` du FTP
+                    // l'adosserait au répertoire courant comme un enfant
+                    start = if wanted.starts_with('/') {
+                        wanted.to_string()
+                    } else {
+                        fs.realpath(wanted).await.unwrap_or_else(|_| wanted.to_string())
+                    };
+                }
+                Err(e) => self.hub.warn(
+                    "connect",
+                    format!("Répertoire de départ injoignable ({wanted}) : {e} — départ à la racine"),
+                ),
+            }
+        }
         drop(fs);
-        let mut info = info;
         info.connections = pool.live_count();
         info.max_connections = pool.max;
-        // on mémorise le chemin initial si vide
-        let start = if site.remote_dir.is_empty() || site.remote_dir == "/" {
-            "/".to_string()
-        } else {
-            site.remote_dir.clone()
-        };
-        self.hub.info("connect", format!("Répertoire distant de départ : {}", start));
+        info.server_dir = start.clone();
+        self.hub.info("connect", format!("Répertoire distant de départ : {start}"));
         self.hub.publish(Event::dirty("connections"));
         Ok(info)
     }

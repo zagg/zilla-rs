@@ -37,9 +37,16 @@ being:
 - Priorities, bandwidth throttling, pause/resume/cancel/retry
 - Resume (`REST`), overwrite/skip/newer/rename policies, mtime preservation (`MDTM`/`MFMT`)
 - Directory recursion, queue persistence across restarts, completion notification
+- Both panes are told the moment a row finishes: the folder that received (or
+  lost) a file is re-listed straight away, without waiting for the page's poll
+- A finished row leaves the waiting list; the tally stays on the strip and one
+  click brings the folded rows back
 
 **Site manager**
 - Nested groups, per-site overrides (timeouts, commands, TLS level, logintype)
+- On connect, the remote pane opens on the directory the site asks for (`/`
+  lets the server choose) and the local pane on its `Local directory`, which is
+  also where downloads land
 - FileZilla-compatible XML import/export
 - Quick connect, recents, bookmarks
 
