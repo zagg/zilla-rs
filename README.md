@@ -41,6 +41,8 @@ being:
   lost) a file is re-listed straight away, without waiting for the page's poll
 - A finished row leaves the waiting list; the tally stays on the strip and one
   click brings the folded rows back
+- One 🧹 empties the queue outright: no row left behind, and the transfers that
+  were running hand their slot back at the next chunk
 - The queue lives in the bottom strip under the "Transferts" tab instead of
   between the two file panes, so both panes keep the full width
 
@@ -51,6 +53,11 @@ being:
   also where downloads land
 - FileZilla-compatible XML import/export
 - Quick connect, recents, bookmarks
+- A site flagged as favourite — the star in the tree, or the "favourite" box on
+  its sheet — hangs off the top bar as a button: one click to connect, one to
+  get out, and the dot on the button says whether a wire is open
+- "Se connecter" greys out while a connection holds the place, "Déconnecter"
+  greys out when none does: the state reads off the buttons, not off the log
 
 **Settings & logging**
 - Nine grouped settings tabs, applied live over WebSocket

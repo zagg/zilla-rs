@@ -257,9 +257,21 @@ impl Transfers {
         before - q.jobs.len()
     }
 
-    pub fn clear_all(&self) {
+    /// « Vider la file » : plus rien dedans, ni en cours ni derrière. Une ligne
+    /// effacée ne laisse rien derrière elle — l'écriture en vol, qui ne retrouve
+    /// plus sa place dans la liste, rend sa part et coupe ; `complete` comme
+    /// `fail` ne viennent plus rien réanimer après coup. La liste repart vide,
+    /// et vide elle reste.
+    pub fn clear_all(&self) -> usize {
         let mut q = self.queue.lock().unwrap();
+        let n = q.jobs.len();
         q.jobs.clear();
+        q.abandoned.clear();
+        if n > 0 {
+            self.hub
+                .info("transfers", format!("File vidée : {n} ligne(s) retirée(s)."));
+        }
+        n
     }
 
     pub fn cancel(&self, id: &str) -> bool {

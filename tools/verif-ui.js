@@ -139,12 +139,19 @@ global.WebSocket = function () { this.onmessage = null; this.close = () => { }; 
 try { Object.defineProperty(global, "navigator", { value: { userAgent: "node" }, configurable: true }); } catch { }
 global.getComputedStyle = () => ({ getPropertyValue: () => "" });
 
-/* la file qu'on joue est en mémoire : rien ne traîne par-dessus les runs */
-const ligne = (etat) => ({
-  id: "j1", site_id: "s1", site_name: "démo", direction: "down", state: etat,
+/* la file qu'on joue est en mémoire : rien ne traîne par-dessus les runs.
+   l'état s'écrit comme le moteur le lâche aujourd'hui sur le fil — minuscule,
+   « done », « down » — et `ligne(...)` habille la même rangée en « Done »,
+   « Down » quand elle dort dans `transferqueue.json` depuis avant la mise à
+   jour : la page est censue lire les deux, et c'est bien là que la faute
+   s'était logée. */
+const ligne = (etat, anciennement = false) => ({
+  id: "j1", site_id: "s1", site_name: "démo",
+  direction: anciennement ? "Down" : "down",
+  state: anciennement ? etat[0].toUpperCase() + etat.slice(1) : etat,
   remote: "/atelier/fiche.txt", local: "/root/fiche.txt", size: 1000, transferred: 320,
   speed: 204800, started: 1, finished: 0, error: "", attempts: 0, last_step: 1,
-  priority: "normal", kind: "file",
+  priority: anciennement ? "Normal" : "normal", kind: "file",
 });
 let etat = {
   jobs: [ligne("active")],
@@ -191,7 +198,7 @@ const _setTimeout = setTimeout;
 global.setTimeout = (fn, ms) => { const t = _setTimeout(() => { timer.delete(t); fn(); }, Math.min(ms || 0, 5)); timer.add(t); return t; };
 
 (async () => {
-  new Function(JS + "\n;global.__api = { boot, S, montrerFile, voletTransferts, renderQueue, refreshQueue };")();
+  new Function(JS + "\n;global.__api = { boot, S, montrerFile, voletTransferts, renderQueue, refreshQueue, majConnexion, rendreFavoris, viderFile };")();
   const A = global.__api;
   await new Promise((r) => _setTimeout(r, 200));
   // si boot() a heurté, il l'écrit dans la page : on le laisse voir
@@ -204,6 +211,9 @@ global.setTimeout = (fn, ms) => { const t = _setTimeout(() => { timer.delete(t);
   const liste = registry.get("list-queue");
   const compte = registry.get("tq-count");
   const stats = registry.get("q-stats");
+  const barre = registry.get("fav-bar");
+  const boutonConnecter = registry.get("btn-connect");
+  const boutonDeconnecter = registry.get("btn-disconnect");
 
   console.log("1) à l'ouverture   : volet caché =", tq.classList.contains("hidden"), "| journal caché =", journal.style.display === "none");
 
@@ -214,19 +224,52 @@ global.setTimeout = (fn, ms) => { const t = _setTimeout(() => { timer.delete(t);
     "| journal caché =", journal.style.display === "none",
     "| outils cachés =", outils.classList.contains("hidden"));
 
+  etat.jobs.push(Object.assign(ligne("active", true), { id: "j2", direction: "Up", remote: "/atelier/en-voi.txt" }));
+  await A.refreshQueue();
   console.log("3) une ligne en cours →", /class="r"/.test(liste.innerHTML) ? "ligne affichée" : "RIEN",
     "| une barre de progression ", /class="bar/.test(liste.innerHTML) ? "dedans" : "absente",
+    "| le sens lu sur le fil =", /\u2193/.test(liste.innerHTML) && /\u2191/.test(liste.innerHTML) ? "les deux, comme écrit" : "MAL TRADUIT",
     "| badge onglet =", compte.textContent);
 
-  etat = { jobs: [ligne("done")], stats: { pending: 0, active: 0, done: 1, failed: 0, paused: false, bytes_per_sec: 0, total_bytes: 1000, done_bytes: 1000 } };
+  etat = { jobs: [ligne("waiting")], stats: { pending: 1, active: 0, done: 0, failed: 0, paused: false, bytes_per_sec: 0, total_bytes: 1000, done_bytes: 0 } };
+  await A.refreshQueue();
+  console.log("4) en attente      : une ligne debout =", /class="r"/.test(liste.innerHTML),
+    "| libellé =", /en attente/.test(liste.innerHTML) ? "\u00ab en attente \u00bb" : "MAL TRADUIT");
+
+  etat = { jobs: [ligne("done"), Object.assign(ligne("done", true), { id: "j3" })], stats: { pending: 0, active: 0, done: 2, failed: 0, paused: false, bytes_per_sec: 0, total_bytes: 2000, done_bytes: 2000 } };
   await A.refreshQueue();
   const encore = /class="r"/.test(liste.innerHTML);
-  console.log("4) ligne finie     : encore affichée =", encore, "| décompte =", String(stats.innerHTML).match(/\d+ terminés/)[0],
+  console.log("5) ligne finie     : encore affichée =", encore,
+    "(qu'elle dise « done » ou « Done », la rangée est partie)",
+    "| décompte =", String(stats.innerHTML).match(/\d+ terminés/)[0],
     "| lien masqués =", /q-show-done/.test(stats.innerHTML));
 
-  console.log("5) bouton du bandeau :");
+  console.log("6) bouton du bandeau :");
   A.montrerFile();
   console.log("   volet caché =", registry.get("transfer-view").classList.contains("hidden"));
+
+  console.log("7) état de la connexion :");
+  A.S.connected = { s1: { connected: true, host: "demo.local", proto: "FTP", live: 1, max: 1 } };
+  A.majConnexion();
+  console.log("   un fil ouvert  : « Se connecter » figé =", !!boutonConnecter.disabled,
+    "| « Déconnecter » libre =", !boutonDeconnecter.disabled);
+  A.S.connected = {};
+  A.majConnexion();
+  console.log("   plus de fil    : « Se connecter » libre =", !boutonConnecter.disabled,
+    "| « Déconnecter » figé =", !!boutonDeconnecter.disabled);
+
+  console.log("8) favoris du gestionnaire :");
+  A.S.sites = [{ id: "s1", name: "démo", host: "demo.local", proto: "ftp", favorite: true },
+               { id: "s9", name: "oublié", host: "autre", proto: "ftp" }];
+  A.rendreFavoris();
+  const favori = registry.get("fav-s1");
+  const nom = favori ? favori.children.map((c) => c.textContent || "").join("") : "(aucun)";
+  console.log("   un favori sur deux → un bouton dans la barre =",
+    !!favori, "| il dit le nom du site =", JSON.stringify(nom),
+    "| le non-favori n'y est pas =", !registry.has("fav-s9"));
+  A.S.sites = [A.S.sites[1]];
+  A.rendreFavoris();
+  console.log("   plus aucun favori : la barre se range =", barre.classList.contains("hidden"));
   console.log("\nrequêtes HTTP simulées :", appels);
   process.exit(0);
 })().catch((e) => { console.error("CA CASSE:", e); process.exit(1); });

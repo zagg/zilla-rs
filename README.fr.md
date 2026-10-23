@@ -41,6 +41,8 @@ transferts, journal que l'on lit vraiment — tout en étant :
   reçu ou lâché un fichier est redemandé sur-le-champ, sans attendre la sonde
 - Une ligne terminée s'efface de la file d'attente ; le décompte reste au bandeau
   et un clic la rend pour la relire
+- Un 🧹 vide la file entièrement : plus une ligne dedans, et les transferts en
+  cours rendent leur créneau à la part d'octets suivante
 - La file tient dans le volet du bas, sous l'onglet « Transferts », et plus entre
   les deux panneaux de fichiers — les deux panneaux gardent toute la largeur
 
@@ -51,6 +53,11 @@ transferts, journal que l'on lit vraiment — tout en étant :
   c'est là que les téléchargements atterrissent
 - Import/export XML compatible FileZilla
 - Connexion rapide, sites récents, favoris
+- Un site mis en favori — l'étoile dans l'arbre, ou la case « favori » de sa fiche —
+  s'accroche en bouton dans la barre du haut : un clic pour s'y connecter, un autre
+  pour en sortir, la pastille du bouton dit si le fil est ouvert
+- « Se connecter » est grisé tant qu'une connexion tient la place, « Déconnecter »
+  l'est quand il n'y en a plus : l'état se lit sur les boutons, pas dans le journal
 
 **Réglages et journal**
 - Neuf onglets de réglages appliqués à chaud via WebSocket

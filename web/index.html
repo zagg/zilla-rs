@@ -33,6 +33,7 @@
       <svg viewBox="0 0 24 24" class="i"><path d="M4 4v6h6M20 20v-6h-6M5 14a7 7 0 0 1 12-3m1 4a7 7 0 0 1-12 3"/></svg>
     </button>
     <span class="sep"></span>
+    <span id="fav-bar" class="favbar hidden" title="Sites favoris — connexion en un geste"></span>
     <button class="btn" id="btn-queue" title="File de transferts (Ctrl+Alt+T)">
       <svg viewBox="0 0 24 24" class="i"><path d="M4 3h16v3H4zm0 6h16v3H4zm0 6h10v3H4z"/></svg>
       <span class="pill" id="queue-badge">0</span>
@@ -126,7 +127,7 @@
       <span class="grow"></span>
       <span class="tq-tools hidden" id="tq-tools">
         <button class="btn mini" id="q-pause" title="Pause sur la file">⏸</button>
-        <button class="btn mini" id="q-clear" title="Effacer les terminés">🧹</button>
+        <button class="btn mini" id="q-clear" title="Vider entièrement la file — les lignes en cours seront coupées">🧹</button>
         <button class="btn mini" id="q-more" title="Ouvrir la fenêtre détaillée">⤢</button>
       </span>
       <label class="mini-label"><input type="checkbox" id="log-verbose"> détail</label>

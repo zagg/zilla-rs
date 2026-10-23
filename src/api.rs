@@ -772,10 +772,7 @@ fn default_what() -> String {
 
 async fn clear_jobs(State(app): State<Arc<App>>, Json(b): Json<ClearBody>) -> Response {
     let n = match b.what.as_str() {
-        "all" => {
-            app.transfers.clear_all();
-            usize::MAX
-        }
+        "all" => app.transfers.clear_all(),
         "failed" => app.transfers.clear_failed(),
         _ => app.transfers.clear_done(),
     };

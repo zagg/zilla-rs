@@ -760,10 +760,24 @@ function dialogMedia(path, url, kind) {
 }
 
 /* ═══════════════════════════ file de transferts ═══════════════════════════ */
+/* Le moteur écrit « Done », « Down », « Normal » sur le fil ; la page, elle,
+   compare en minuscules. Faute de cet accord, une ligne finie s'accroche à la
+   liste et son état reste « en attente » à vie. On remet donc tout le monde
+   à l'endroit à l'entrée de la file, sans égard pour la casse du voisin. */
+const etatBas = (s) => String(s ?? "").toLowerCase();
+const normeJob = (t) => ({
+  ...t,
+  state: etatBas(t.state),
+  direction: etatBas(t.direction),
+  priority: etatBas(t.priority),
+  kind: etatBas(t.kind),
+});
+
 function renderQueue(jobs) {
   if (jobs) S.queue.jobs = jobs;
   const list = $("#list-queue");
-  const tous = S.queue.jobs;
+  const tous = (S.queue.jobs || []).map(normeJob);
+  S.queue.jobs = tous;
   /* une ligne terminée n'a plus rien à faire dans la liste d'attente : on la
      retire du volet, mais on la garde sous la main pour la relire. */
   const cache = S.queue.showDone ? [] : tous.filter((t) => t.state === "done");
@@ -848,20 +862,38 @@ function listQueueEvents() {
       if (t && t.state !== "done") add(t.state === "paused" ? "Reprendre" : "Mettre en pause", () => apiPost("/transfers/pause", { id }).then(refreshQueue));
       if (t && t.state !== "done") add("Annuler", () => apiPost("/transfers/cancel", { id }).then(refreshQueue));
     }
-    add("Tout effacer (terminés)", () => apiPost("/transfers/clear", { what: "done" }).then(refreshQueue));
+    add("Vider la file (tout)", viderFile);
     add("Réessayer les échecs", () => apiPost("/transfers/retry", { id: "all" }).then(refreshQueue));
     m.style.left = Math.min(ev.clientX, innerWidth - 240) + "px";
     m.style.top = ev.clientY + "px";
     m.classList.remove("hidden");
   });
   $("#q-pause").onclick = () => apiPost("/transfers/pause-all", { paused: !(S.queue.stats && S.queue.stats.paused) }).then(refreshQueue).catch(fail);
-  $("#q-clear").onclick = () => apiPost("/transfers/clear", { what: "done" }).then(refreshQueue).catch(fail);
+  $("#q-clear").onclick = viderFile;
   $("#q-more").onclick = queueDialog;
+}
+/* « Vider la file » : plus une ligne dedans, ni en cours ni derrière. Le moteur
+   rend ses créneaux à la part d'octets suivante — l'écriture en vol ne retrouve
+   plus sa place dans la liste et coupe — et la liste repart vide. Les terminés,
+   eux, n'attendaient pas ce bouton : ils s'en vont d'eux-mêmes. */
+async function viderFile() {
+  const n = (S.queue.jobs || []).length;
+  if (!n) return toast("La file est déjà vide.", "ok");
+  const enCours = (S.queue.stats && S.queue.stats.active) || 0;
+  const mots = enCours
+    ? `${n} ligne(s) seront retirées, dont ${enCours} en cours qui seront coupées à la part suivante.`
+    : `${n} ligne(s) seront retirées.`;
+  if (!await confirmBox("Vider la file des transferts ?", mots)) return;
+  try {
+    const d = await apiPost("/transfers/clear", { what: "all" });
+    toast(`File vidée${d && d.cleared != null ? ` (${d.cleared} ligne(s))` : ""}.`, "ok");
+    await refreshQueue();
+  } catch (e) { fail(e, "purge de la file"); }
 }
 async function refreshQueue() {
   try {
     const d = await apiGet("/transfers");
-    S.queue.jobs = d.jobs.filter((j) => j.state !== "cancelled");
+    S.queue.jobs = (d.jobs || []).map(normeJob).filter((j) => j.state !== "cancelled");
     S.queue.stats = d.stats;
     renderQueue();
   } catch (e) { }
@@ -871,7 +903,7 @@ function queueDialog() {
   dialog("File des transferts", `<div style="display:flex;gap:8px;margin-bottom:8px">
       <button class="btn mini" id="qz-pause">⏸ Pause globale</button>
       <button class="btn mini" id="qz-retry">↻ Réessayer les échecs</button>
-      <button class="btn mini" id="qz-clear">✕ Effacer terminés</button>
+      <button class="btn mini" id="qz-purge">🧹 Vider la file</button>
       <span class="grow"></span><span class="dim" id="qz-sum"></span></div>
       <table class="tb" id="qz-tb">${cols}<tbody></tbody></table>`,
     [["Fermer", ""]], (h) => {
@@ -890,7 +922,7 @@ function queueDialog() {
       onClose = () => { };
       h.querySelector("#qz-pause").onclick = () => apiPost("/transfers/pause-all", { paused: !(S.queue.stats && S.queue.stats.paused) }).then(refreshQueue).then(fill);
       h.querySelector("#qz-retry").onclick = () => apiPost("/transfers/retry", { id: "all" }).then(refreshQueue).then(fill);
-      h.querySelector("#qz-clear").onclick = () => apiPost("/transfers/clear", { what: "done" }).then(refreshQueue).then(fill);
+      h.querySelector("#qz-purge").onclick = async () => { await viderFile(); fill(); };
     }, "1040px");
 }
 
@@ -905,12 +937,66 @@ function renderConnections(map) {
   $("#st-conns").innerHTML = connBadge();
   if (map && S.remote.site) S.remote.connected = !!(map[S.remote.site] && map[S.remote.site].connected);
   renderSiteTree();
+  majConnexion();
+}
+/* Y-a-t-il un fil ouvert ? La barre du haut doit sa réponse à cette seule
+   question, et c'est elle qui fige « Se connecter » ou « Déconnecter ». */
+const enLigne = () => Object.values(S.connected || {}).some((c) => c && (c.connected || c.live));
+/* L'état courant de la connexion se lit sur les boutons, plus seulement dans
+   le journal : celui qui vient d'être fait se grise, l'autre prend la main. */
+function majConnexion() {
+  const live = enLigne();
+  const boutonConnecter = $("#btn-connect"), boutonDeconnecter = $("#btn-disconnect");
+  if (boutonConnecter) {
+    boutonConnecter.disabled = live;
+    boutonConnecter.title = live ? "Une connexion tient déjà la place — déconnectez pour en reprendre une" : "Se connecter au site ciblé";
+  }
+  if (boutonDeconnecter) {
+    boutonDeconnecter.disabled = !live;
+    boutonDeconnecter.title = live ? "Déconnecter (Ctrl+Shift+D)" : "Aucune connexion à fermer";
+  }
+  rendreFavoris();
+}
+/* Les sites mis en favori s'accrochent en barre du haut : un geste, la
+   connexion. Le bouton porte la couleur de l'état — vert = fil ouvert, et il
+   rend alors l'antenne, comme « Déconnecter » le fait plus bas. */
+function rendreFavoris() {
+  const barre = $("#fav-bar");
+  if (!barre) return;
+  const favoris = (S.sites || []).filter((s) => s.favorite).sort((a, b) => a.name.localeCompare(b.name));
+  barre.classList.toggle("hidden", favoris.length === 0);
+  barre.innerHTML = "";
+  for (const s of favoris) {
+    const live = !!(S.connected[s.id] && S.connected[s.id].connected);
+    barre.appendChild(el("button", {
+      class: "btn fav" + (live ? " live" : ""),
+      id: "fav-" + s.id,
+      "data-site": s.id,
+      title: `${s.name} — ${s.host}${live ? " · connecté : cliquer pour déconnecter" : " · cliquer pour se connecter"}`,
+      onclick: () => {
+        if (live) { S.remote.site = s.id; disconnectCurrent(); }
+        else connectTo(s.id);
+      },
+    }, el("span", { class: "dot" }), s.name));
+  }
+}
+async function toggleFavori(id) {
+  const s = (S.sites || []).find((x) => x.id === id);
+  if (!s) return;
+  try {
+    await apiPost("/sites/save", { ...s, favorite: !s.favorite });
+    await loadSites();
+    renderSiteTree();
+    rendreFavoris();
+    toast(s.favorite ? "Retiré des favoris." : "Ajouté aux favoris — bouton dans la barre du haut.", "ok");
+  } catch (e) { fail(e, "favori"); }
 }
 async function connectTo(siteId) {
   try {
     const d = await apiPost("/connect", { site_id: siteId });
     S.remote.site = siteId;
     S.remote.connected = true;
+    majConnexion();
     toast("Connecté à " + (d.host || ""), "ok", "Connexion");
     /* le site dit où l'on va de chaque côté : le panneau distant prend le
        chemin que le serveur a bien voulu annoncer, le panneau local celui que
@@ -936,6 +1022,7 @@ async function quickConnect() {
     const d = await apiPost("/connect", body);
     S.remote.site = d.site_id;
     S.remote.connected = true;
+    majConnexion();
     toast("Connecté.", "ok", "Connexion");
     await loadRemote((d.info && d.info.server_dir) || "/", true);
     refreshStatus();
@@ -949,19 +1036,26 @@ async function disconnectCurrent() {
     S.remote.connected = false;
     S.remote.entries = [];
     renderPane("remote");
+    majConnexion();
     toast("Déconnecté.", "ok");
     refreshStatus();
   } catch (e) { fail(e); }
 }
 async function reconnect() {
   if (!S.remote.site) return;
-  try { await apiPost("/connect", { site_id: S.remote.site }); toast("Reconnecté.", "ok"); await loadRemote(); } catch (e) { fail(e); }
+  try { await apiPost("/connect", { site_id: S.remote.site }); S.remote.connected = true; majConnexion(); toast("Reconnecté.", "ok"); await loadRemote(); } catch (e) { fail(e); }
 }
 
 /* ═══════════════════════════ gestionnaire de sites ═══════════════════════════ */
 function renderSiteTree() {
   const tree = $("#sites-tree");
   if (!tree) return;
+  /* une ligne d'arbre : pastille d'état, nom, proto — et l'étoile qui accroche
+     le site en barre du haut. Le reste de la fonction ne fait que la placer. */
+  const ligneDeSite = (s, classe = "", style = "") => {
+    const live = !!(S.connected[s.id] && S.connected[s.id].connected);
+    return `<div class="n ${classe} ${S.selectedSite === s.id ? "sel" : ""} ${live ? "live" : ""}"${style ? ` style="${style}"` : ""} data-site="${esc(s.id)}"><span class="etoile ${s.favorite ? "on" : ""}" data-fav="${esc(s.id)}" title="${s.favorite ? "Retirer des favoris" : "Mettre en favori — un bouton de connexion rapide dans la barre du haut"}">★</span><span class="dot"></span>${esc(s.name)}<span class="dim" style="margin-left:auto">${esc(s.proto || "FTP")}</span></div>`;
+  };
   const byGroup = {};
   for (const s of S.sites) {
     const g = s.group || "";
@@ -969,30 +1063,36 @@ function renderSiteTree() {
   }
   const groups = Object.keys(byGroup).filter(Boolean).sort();
   const html = [];
-  const rootNode = (s) => {
-    const live = S.connected[s.id] && S.connected[s.id].connected;
-    return `<div class="n ${S.selectedSite === s.id ? "sel" : ""} ${live ? "live" : ""}" data-site="${esc(s.id)}"><span class="dot"></span>${esc(s.name)}<span class="dim" style="margin-left:auto">${esc(s.proto || "FTP")}</span></div>`;
-  };
-  html.push(...(byGroup[""] || []).sort((a, b) => a.name.localeCompare(b.name)).map(rootNode));
+  html.push(...(byGroup[""] || []).sort((a, b) => a.name.localeCompare(b.name)).map((s) => ligneDeSite(s)));
   for (const g of groups) {
     const parts = g.split("/");
     html.push(`<div class="n g"><span>▾</span>${esc(parts[parts.length - 1])}</div>`);
-    html.push(...byGroup[g].sort((a, b) => a.name.localeCompare(b.name)).map((s) => `<div class="n child ${S.selectedSite === s.id ? "sel" : ""} ${S.connected[s.id]?.connected ? "live" : ""}" data-site="${esc(s.id)}"><span class="dot"></span>${esc(s.name)}<span class="dim" style="margin-left:auto">${esc(s.proto || "FTP")}</span></div>`));
+    html.push(...byGroup[g].sort((a, b) => a.name.localeCompare(b.name)).map((s) => ligneDeSite(s, "child")));
     const sub = groups.filter((x) => x.startsWith(g + "/"));
     for (const sg of sub) {
       const nm = sg.slice(g.length + 1).split("/")[0];
       html.push(`<div class="n g child"><span>▸</span>${esc(nm)}</div>`);
-      html.push(...(byGroup[sg] || []).map((s) => `<div class="n child" style="padding-left:38px" data-site="${esc(s.id)}"><span class="dot"></span>${esc(s.name)}</div>`));
+      html.push(...(byGroup[sg] || []).map((s) => ligneDeSite(s, "child", "padding-left:38px")));
     }
   }
   tree.innerHTML = html.join("") || `<div class="empty">Aucun site. Créez-en un.</div>`;
   tree.querySelectorAll("[data-site]").forEach((n) => {
-    n.onclick = () => { S.selectedSite = n.dataset.site; renderSiteTree(); siteForm(n.dataset.site); };
+    n.onclick = () => {
+      S.selectedSite = n.dataset.site;
+      renderSiteTree();
+      /* la fiche du site choisi s'affiche à droite : sans ces deux lignes,
+         cliquer sur un nom ne faisait rien d'autre que le surligner */
+      const fiche = $("#site-pane");
+      if (fiche) { fiche.innerHTML = siteForm(n.dataset.site); bindForm(fiche); }
+    };
     n.ondblclick = () => connectTo(n.dataset.site);
+  });
+  tree.querySelectorAll(".etoile").forEach((e) => {
+    e.onclick = (ev) => { ev.stopPropagation(); toggleFavori(e.dataset.fav); };
   });
 }
 function siteForm(id) {
-  const s = id ? (S.sites.find((x) => x.id === id) || {}) : { name: "", host: "", port: null, proto: "ftp", login: "normal", user: "", password: "", keyfile: "", remote_dir: "/", local_dir: "", tls: "if", max_connections: null, limit_connections: false, comment: "", disable_keepalive: false, group: "", virtual_host: "", pre_commands: [], post_commands: [], site_chmod: true, site_chown: false };
+  const s = id ? (S.sites.find((x) => x.id === id) || {}) : { name: "", host: "", port: null, proto: "ftp", login: "normal", user: "", password: "", keyfile: "", remote_dir: "/", local_dir: "", tls: "if", max_connections: null, limit_connections: false, comment: "", disable_keepalive: false, group: "", virtual_host: "", pre_commands: [], post_commands: [], site_chmod: true, site_chown: false, favorite: false };
   const host = s.host || "";
   return `<div id="site-form">
     <fieldset><legend>Général</legend>
@@ -1004,6 +1104,7 @@ function siteForm(id) {
         ${["ftp", "ftpes", "ftps", "sftp"].map((p) => `<option value="${p}" ${s.proto === p ? "selected" : ""}>${p.toUpperCase()}</option>`).join("")}</select></div>
       <div class="field"><label>Chiffrement</label><select name="tls">
         ${[["plain", "Clair, sans TLS"], ["if", "TLS si disponible"], ["require", "Exiger un TLS explicite"], ["pfs", "Exiger TLS + secret parfait"]].map(([v, l]) => `<option value="${v}" ${s.tls === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="field"><label>Connexion rapide</label><label><input type="checkbox" name="favorite" ${s.favorite ? "checked" : ""}> favori — reste en bouton dans la barre du haut</label><div class="hint">un site favori s'accroche en haut de l'écran : un clic pour s'y connecter, un autre pour en sortir</div></div>
     </fieldset>
     <fieldset><legend>Authentification</legend>
       <div class="field"><label>Type</label><select name="login">
@@ -1090,6 +1191,7 @@ function bindForm(root) {
       site_chmod: !!g("site_chmod")?.checked,
       site_chown: !!g("site_chown")?.checked,
       comment: g("comment")?.value || "",
+      favorite: !!g("favorite")?.checked,
       pre_commands: (g("pre")?.value || "").split("\n").map((x) => x.trim()).filter(Boolean),
       post_commands: (g("post")?.value || "").split("\n").map((x) => x.trim()).filter(Boolean),
     };
@@ -1099,6 +1201,7 @@ function bindForm(root) {
       S.selectedSite = d.id || S.selectedSite;
       await loadSites();
       renderSiteTree();
+      rendreFavoris();
       toast("Site enregistré.", "ok");
     } catch (e) { fail(e); }
   };
@@ -1118,7 +1221,7 @@ function bindForm(root) {
   if (bp) bp.onclick = async () => { if (!S.selectedSite) return; const d = await apiPost("/sites/copy", { id: S.selectedSite }); await loadSites(); renderSiteTree(); toast("Site dupliqué.", "ok"); };
 }
 async function loadSites() {
-  try { const d = await apiGet("/sites"); S.sites = d.sites || []; const c = d.connected || []; S.connected = Object.fromEntries(c.map((id) => [id, { connected: true }])); } catch (e) { fail(e); }
+  try { const d = await apiGet("/sites"); S.sites = d.sites || []; const c = d.connected || []; S.connected = Object.fromEntries(c.map((id) => [id, { connected: true }])); rendreFavoris(); } catch (e) { fail(e); }
 }
 function importDialog() {
   dialog("Importer un gestionnaire de sites", `<div class="field wide"><label>Fichier sitemanager.xml</label>
@@ -1617,6 +1720,7 @@ const CMDS = [
   ["Réglages", () => settingsDialog(), "Ctrl+,"],
   ["File des transferts", montrerFile, "Ctrl+Alt+T"],
   ["File des transferts (fenêtre détaillée)", queueDialog, ""],
+  ["Vider la file des transferts", viderFile, ""],
   ["Signets", bookmarksDialog, ""],
   ["Comparer les dossiers local/distant", compareDialog, "Ctrl+Shift+C"],
   ["Télécharger la sélection", () => { const s = selected("remote"); if (s.length) download(s.map((e) => joinRemote(S.remote.path, e.name)), S.local.path, true); }, "Ctrl+D"],

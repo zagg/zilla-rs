@@ -93,7 +93,16 @@ button, input, select { font: inherit; color: inherit; }
 .btn.mini { padding: 2px 6px; border-radius: 6px; background: transparent; border: 1px solid transparent; }
 .btn.mini:hover { border-color: var(--line); background: var(--bg3); }
 .btn:disabled { opacity: .45; cursor: default; }
+.btn:disabled:hover { background: var(--bg3); border-color: var(--line); }
 .btn .i { width: 15px; height: 15px; fill: currentColor; }
+/* Sites favoris : la barre du haut les montre en boutons de passage immédiat,
+   et leur pastille dit où on est — vert, le fil est ouvert. */
+.favbar { display: flex; align-items: center; gap: 4px; }
+.favbar.hidden { display: none; }
+.btn.fav { padding: 4px 8px; }
+.btn.fav .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-dim); flex: none; }
+.btn.fav.live { border-color: var(--ok); color: var(--ok); }
+.btn.fav.live .dot { background: var(--ok); }
 .pill {
   background: var(--accent); color: var(--accent-fg);
   border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700;
@@ -344,6 +353,13 @@ legend { color: var(--accent); font-size: 12px; font-weight: 700; padding: 0 6px
 .tree .n.sel { background: var(--sel); color: var(--sel-fg); }
 .tree .n .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-dim); }
 .tree .n.live .dot { background: var(--ok); }
+/* l'étoile est le seul geste du tree qui ne choisisse pas le site : elle
+   l'accroche en barre du haut, ni plus ni moins */
+.tree .n .etoile { opacity: .28; cursor: pointer; font-size: 11px; line-height: 1; }
+.tree .n .etoile:hover { opacity: 1; }
+.tree .n .etoile.on { opacity: .95; color: var(--warn); }
+.tree .n.sel .etoile { opacity: .55; }
+.tree .n.sel .etoile.on { opacity: 1; color: var(--warn); }
 .tree .g { color: var(--fg-dim); font-weight: 700; }
 .tree .n.child { padding-left: 20px; }
 

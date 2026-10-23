@@ -210,6 +210,10 @@ pub struct Site {
     /// Note libre.
     #[serde(default)]
     pub comment: String,
+    /// Site mis en favori : il s'accroche alors en bouton dans la barre du haut,
+    /// pour une connexion en un geste.
+    #[serde(default)]
+    pub favorite: bool,
     #[serde(default)]
     pub disabled: bool,
     /// horodatés (millisecondes epoch)
@@ -283,6 +287,7 @@ impl Default for Site {
             passive: None,
             force_utf8: false,
             disable_keepalive: false,
+            favorite: false,
             pre_commands: Vec::new(),
             post_commands: Vec::new(),
             site_chmod: true,
@@ -552,13 +557,23 @@ impl LogLine {
 }
 
 /// État d'une file de transfert.
+/// Le fil est *minuscule* (`"waiting"`, `"done"`, …) : c'est ce que la page
+/// compare. Les formes « Waiting »/« Done » restent admises à la lecture,
+/// la file de la version précédente dormant dans `transferqueue.json`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum JobState {
+    #[serde(alias = "Waiting")]
     Waiting,
+    #[serde(alias = "Active")]
     Active,
+    #[serde(alias = "Done")]
     Done,
+    #[serde(alias = "Error")]
     Error,
+    #[serde(alias = "Cancelled")]
     Cancelled,
+    #[serde(alias = "Paused")]
     Paused,
 }
 
@@ -611,8 +626,11 @@ pub struct TransferJob {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Direction {
+    #[serde(alias = "Up")]
     Up,
+    #[serde(alias = "Down")]
     Down,
 }
 
@@ -626,10 +644,14 @@ impl Direction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum Priority {
+    #[serde(alias = "Low")]
     Low,
     #[default]
+    #[serde(alias = "Normal")]
     Normal,
+    #[serde(alias = "High")]
     High,
 }
 
