@@ -119,12 +119,19 @@ impl RemoteFs for Muet {
 
 /// Le poste de test : un dossier de travail, un site connecté, un parc muet.
 async fn poste(griffe: &'static str, seconde_coup: u64, silence_secs: u64) -> (Arc<zilla_rs::App>, String, Arc<Pool>, std::path::PathBuf, zilla_rs::demosrv::DemoFtp) {
-    let racine = std::env::temp_dir().join(format!("zilla-muet-{}-{}/", std::process::id(), griffe));
+    // deux terreaux distincts, et c'est important : si le serveur de démo sert
+    // le même dossier que le poste local, un envoi vers « /bord.txt » va
+    // tronquer le fichier source du poste lui-même — et la ligne tombe « à
+    // succès » sans avoir rien pousser, selon qui du serveur ou du fichier
+    // frappe le premier
+    let logis = std::env::temp_dir().join(format!("zilla-muet-{}-{}/", std::process::id(), griffe));
+    let racine = logis.join("a-autres");
     let reglages = std::env::temp_dir().join(format!("zilla-muet-cfg-{}-{}", std::process::id(), griffe));
-    let _ = std::fs::remove_dir_all(&racine);
+    let _ = std::fs::remove_dir_all(&logis);
     let _ = std::fs::remove_dir_all(&reglages);
     std::fs::create_dir_all(&racine).unwrap();
-    std::fs::write(racine.join("bord.txt"), vec![7u8; 1024 * 1024]).unwrap();
+    std::fs::create_dir_all(&logis).unwrap();
+    std::fs::write(logis.join("bord.txt"), vec![7u8; 1024 * 1024]).unwrap();
 
     let demo = zilla_rs::demosrv::DemoFtp::start(&racine).await.expect("démo");
     let app = zilla_rs::App::new(reglages, "test").expect("app");
@@ -147,7 +154,7 @@ async fn poste(griffe: &'static str, seconde_coup: u64, silence_secs: u64) -> (A
     let st = app.site(&site).expect("site");
     let repris = app.pool_for(&st, &app.settings()).await.unwrap();
     let _ = repris;
-    (app, site, parc, racine, demo)
+    (app, site, parc, logis, demo)
 }
 
 #[tokio::test]
