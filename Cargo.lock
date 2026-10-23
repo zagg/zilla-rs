@@ -2694,7 +2694,7 @@ checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zilla-rs"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "arc-swap",
  "async-trait",
