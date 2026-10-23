@@ -928,51 +928,85 @@ function queueDialog() {
 
 /* ═══════════════════════════ connexions ═══════════════════════════ */
 function connBadge() {
-  const c = Object.values(S.connected).filter((x) => x.connected);
+  const c = Object.values(S.connected).filter(filOuvert);
   if (!c.length) return `<span class="dim">aucune connexion</span>`;
-  return c.map((x) => `<b>${esc(x.proto || "FTP")}</b> ${esc(x.host)} <span class="dim">${x.live}/${x.max}</span>`).join(" &nbsp;·&nbsp; ");
+  return c.map((x) => `<b>${esc(x.proto || "FTP")}</b> ${esc(x.host)} <span class="dim">${x.live ?? x.connections ?? "?"}/${x.max ?? x.max_connections ?? "?"}</span>`).join(" &nbsp;·&nbsp; ");
 }
 function renderConnections(map) {
   S.connected = map || S.connected;
   $("#st-conns").innerHTML = connBadge();
-  if (map && S.remote.site) S.remote.connected = !!(map[S.remote.site] && map[S.remote.site].connected);
+  if (map && S.remote.site) S.remote.connected = filOuvert(map[S.remote.site]);
   renderSiteTree();
   majConnexion();
 }
-/* Y-a-t-il un fil ouvert ? La barre du haut doit sa réponse à cette seule
-   question, et c'est elle qui fige « Se connecter » ou « Déconnecter ». */
-const enLigne = () => Object.values(S.connected || {}).some((c) => c && (c.connected || c.live));
+/* Un fil est-il ouvert ? Le portrait que le poste rend de chaque site le dit de
+   trois manières selon le chemin qui nous l'a apporté : `connected` (la liste
+   des sites, et `/status`), `live` (le nombre de fils en vie), `connections`
+   (le même compte sous son nom de fiche SFTP). Ne regarder qu'un seul de ces
+   trois mots laisse les boutons droits comme des boutons fêlés : ils croient
+   qu'on est hors ligne quand on y est déjà. */
+const filOuvert = (c) => !!c && (c.connected === true || (c.live ?? c.connections ?? 0) > 0);
+const enLigne = () => Object.values(S.connected || {}).some(filOuvert) || !!S.remote.connected;
 /* L'état courant de la connexion se lit sur les boutons, plus seulement dans
    le journal : celui qui vient d'être fait se grise, l'autre prend la main. */
 function majConnexion() {
   const live = enLigne();
-  const boutonConnecter = $("#btn-connect"), boutonDeconnecter = $("#btn-disconnect");
+  const boutonConnecter = $("#btn-connect"), boutonDeconnecter = $("#btn-disconnect"), boutonRappeller = $("#btn-reconnect");
   if (boutonConnecter) {
     boutonConnecter.disabled = live;
-    boutonConnecter.title = live ? "Une connexion tient déjà la place — déconnectez pour en reprendre une" : "Se connecter au site ciblé";
+    boutonConnecter.title = live ? "Un fil est déjà ouvert — déconnectez pour en reprendre une" : "Se connecter au site ciblé";
   }
   if (boutonDeconnecter) {
     boutonDeconnecter.disabled = !live;
     boutonDeconnecter.title = live ? "Déconnecter (Ctrl+Shift+D)" : "Aucune connexion à fermer";
   }
+  if (boutonRappeller) {
+    boutonRappeller.disabled = !S.remote.site;
+    boutonRappeller.title = S.remote.site ? "Retenter la connexion du site en main (Ctrl+Shift+R)" : "Aucun site en main à rappeler";
+  }
+  rendrePastille();
   rendreFavoris();
+}
+/* La pastille du haut : un coup d'œil pour savoir qui on tient. Elle est verte
+   quand un fil est ouvert, éteinte quand il n'y en a plus. */
+function rendrePastille() {
+  const pastille = $("#conn-dot");
+  if (!pastille) return;
+  const fils = Object.values(S.connected || {}).filter(filOuvert);
+  pastille.classList.toggle("on", fils.length > 0);
+  pastille.innerHTML = fils.length
+    ? `<span class="dot"></span>${esc(fils[0].host || fils[0].proto || "connecté")}${fils.length > 1 ? `<span class="dim">+${fils.length - 1}</span>` : ""}`
+    : `<span class="dot"></span><span class="dim">hors ligne</span>`;
+  pastille.title = fils.length
+    ? `Fil ouvert : ${fils.map((c) => `${c.proto || "FTP"} ${c.host || ""}`.trim()).join(", ")}`
+    : "Aucune connexion ouverte — « Se connecter » a la main";
 }
 /* Les sites mis en favori s'accrochent en barre du haut : un geste, la
    connexion. Le bouton porte la couleur de l'état — vert = fil ouvert, et il
-   rend alors l'antenne, comme « Déconnecter » le fait plus bas. */
+   rend alors l'antenne, comme « Déconnecter » le fait plus bas. Une barre vide
+   n'est pas muette pour autant : elle dit où accrocher le raccourci. */
 function rendreFavoris() {
   const barre = $("#fav-bar");
   if (!barre) return;
   const favoris = (S.sites || []).filter((s) => s.favorite).sort((a, b) => a.name.localeCompare(b.name));
-  barre.classList.toggle("hidden", favoris.length === 0);
   barre.innerHTML = "";
+  if (!favoris.length) {
+    if ((S.sites || []).length)
+      barre.appendChild(el("button", {
+        class: "btn fav vide",
+        id: "fav-aucun",
+        title: "Raccourci de connexion rapide — le gestionnaire de sites (Ctrl+S) met un site en favori, d'une étoile dans son arbre ou de la case « favori » de sa fiche, et il arrive ici",
+        onclick: () => siteManagerDialog(),
+      }, el("span", { class: "dot" }), "Raccourcis"));
+    return;
+  }
   for (const s of favoris) {
-    const live = !!(S.connected[s.id] && S.connected[s.id].connected);
+    const live = filOuvert(S.connected[s.id]);
     barre.appendChild(el("button", {
       class: "btn fav" + (live ? " live" : ""),
       id: "fav-" + s.id,
       "data-site": s.id,
-      title: `${s.name} — ${s.host}${live ? " · connecté : cliquer pour déconnecter" : " · cliquer pour se connecter"}`,
+      title: `${s.name} — ${s.host}${live ? " · fil ouvert : cliquer pour déconnecter" : " · cliquer pour se connecter"}`,
       onclick: () => {
         if (live) { S.remote.site = s.id; disconnectCurrent(); }
         else connectTo(s.id);
@@ -1053,8 +1087,8 @@ function renderSiteTree() {
   /* une ligne d'arbre : pastille d'état, nom, proto — et l'étoile qui accroche
      le site en barre du haut. Le reste de la fonction ne fait que la placer. */
   const ligneDeSite = (s, classe = "", style = "") => {
-    const live = !!(S.connected[s.id] && S.connected[s.id].connected);
-    return `<div class="n ${classe} ${S.selectedSite === s.id ? "sel" : ""} ${live ? "live" : ""}"${style ? ` style="${style}"` : ""} data-site="${esc(s.id)}"><span class="etoile ${s.favorite ? "on" : ""}" data-fav="${esc(s.id)}" title="${s.favorite ? "Retirer des favoris" : "Mettre en favori — un bouton de connexion rapide dans la barre du haut"}">★</span><span class="dot"></span>${esc(s.name)}<span class="dim" style="margin-left:auto">${esc(s.proto || "FTP")}</span></div>`;
+    const live = filOuvert(S.connected[s.id]);
+    return `<div class="n ${classe} ${S.selectedSite === s.id ? "sel" : ""} ${live ? "live" : ""}"${style ? ` style="${style}"` : ""} data-site="${esc(s.id)}"><span class="etoile ${s.favorite ? "on" : ""}" data-fav="${esc(s.id)}" title="${s.favorite ? "Raccourci dans la barre du haut — cliquer pour le retirer" : "Mettre ce site en raccourci dans la barre du haut"}">★</span><span class="dot"></span>${esc(s.name)}<span class="dim" style="margin-left:auto">${esc(s.proto || "FTP")}</span></div>`;
   };
   const byGroup = {};
   for (const s of S.sites) {
@@ -1090,6 +1124,8 @@ function renderSiteTree() {
   tree.querySelectorAll(".etoile").forEach((e) => {
     e.onclick = (ev) => { ev.stopPropagation(); toggleFavori(e.dataset.fav); };
   });
+  /* la barre du haut se tient au courant de ce qu'on vient d'étoileler */
+  rendreFavoris();
 }
 function siteForm(id) {
   const s = id ? (S.sites.find((x) => x.id === id) || {}) : { name: "", host: "", port: null, proto: "ftp", login: "normal", user: "", password: "", keyfile: "", remote_dir: "/", local_dir: "", tls: "if", max_connections: null, limit_connections: false, comment: "", disable_keepalive: false, group: "", virtual_host: "", pre_commands: [], post_commands: [], site_chmod: true, site_chown: false, favorite: false };
@@ -1104,7 +1140,7 @@ function siteForm(id) {
         ${["ftp", "ftpes", "ftps", "sftp"].map((p) => `<option value="${p}" ${s.proto === p ? "selected" : ""}>${p.toUpperCase()}</option>`).join("")}</select></div>
       <div class="field"><label>Chiffrement</label><select name="tls">
         ${[["plain", "Clair, sans TLS"], ["if", "TLS si disponible"], ["require", "Exiger un TLS explicite"], ["pfs", "Exiger TLS + secret parfait"]].map(([v, l]) => `<option value="${v}" ${s.tls === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-      <div class="field"><label>Connexion rapide</label><label><input type="checkbox" name="favorite" ${s.favorite ? "checked" : ""}> favori — reste en bouton dans la barre du haut</label><div class="hint">un site favori s'accroche en haut de l'écran : un clic pour s'y connecter, un autre pour en sortir</div></div>
+      <div class="field"><label>Connexion rapide</label><label><input type="checkbox" name="favorite" ${s.favorite ? "checked" : ""}> favori — s'accroche en bouton dans la barre du haut</label><div class="hint">un site favori tient en un bouton de la barre du haut : un clic pour s'y connecter, un autre pour en sortir</div></div>
     </fieldset>
     <fieldset><legend>Authentification</legend>
       <div class="field"><label>Type</label><select name="login">
@@ -1129,6 +1165,7 @@ function siteForm(id) {
     <div style="display:flex;gap:8px">
       <button class="btn primary" id="site-save">Enregistrer</button>
       <button class="btn" id="site-test">Tester la connexion</button>
+      <button class="btn" id="site-fav" title="${s.favorite ? "Ce site tient déjà son bouton dans la barre du haut" : "Lui donner un bouton dans la barre du haut, pour une connexion en un geste"}">${s.favorite ? "★ Retirer le raccourci" : "☆ Mettre en raccourci"}</button>
       <span class="grow"></span>
       <button class="btn" id="site-dup">Dupliquer</button>
       <button class="btn" id="site-del">Supprimer</button>
@@ -1145,7 +1182,7 @@ function siteManagerDialog() {
           <button class="btn mini" id="exp">Export XML</button>
         </div>
         <div class="tree" id="sites-tree" style="height:340px"></div>
-        <div class="dim" style="font-size:11.5px;margin-top:6px">double-clic = se connecter</div>
+        <div class="dim" style="font-size:11.5px;margin-top:6px">double-clic = se connecter &nbsp;·&nbsp; ★ = le mettre en raccourci dans la barre du haut</div>
       </div>
       <div id="site-pane">${siteForm(null)}</div>
     </div>`,
@@ -1218,7 +1255,21 @@ function bindForm(root) {
     $("#site-pane").innerHTML = siteForm(null); bindForm($("#site-pane"));
   };
   const bp = root.querySelector("#site-dup");
-  if (bp) bp.onclick = async () => { if (!S.selectedSite) return; const d = await apiPost("/sites/copy", { id: S.selectedSite }); await loadSites(); renderSiteTree(); toast("Site dupliqué.", "ok"); };
+  if (bp) bp.onclick = async () => { if (!S.selectedSite) return; const d = await apiPost("/sites/copy", { id: S.selectedSite }); await loadSites(); renderSiteTree(); rendreFavoris(); toast("Site dupliqué.", "ok"); };
+  /* le geste du raccourci est là, sous la main, sans avoir à chercher l'étoile
+     tout au fond de l'arbre */
+  const fb = root.querySelector("#site-fav");
+  if (fb) fb.onclick = async () => {
+    if (!S.selectedSite) {
+      const c = g("favorite");
+      if (c) c.checked = !c.checked;
+      return;
+    }
+    await toggleFavori(S.selectedSite);
+    const fiche = $("#site-pane");
+    if (fiche) { fiche.innerHTML = siteForm(S.selectedSite); bindForm(fiche); }
+    renderSiteTree();
+  };
 }
 async function loadSites() {
   try { const d = await apiGet("/sites"); S.sites = d.sites || []; const c = d.connected || []; S.connected = Object.fromEntries(c.map((id) => [id, { connected: true }])); rendreFavoris(); } catch (e) { fail(e); }
@@ -1895,10 +1946,15 @@ function wsConnect() {
       if (m.status) {
         S.settings = m.status.settings || S.settings;
         S.version = m.status.version || S.version;
+        /* le poste nous tend son portrait : sans ses connexions, la page
+           démarrerait « hors ligne » sous les yeux d'un fil bien ouvert */
+        if (m.status.connections) S.connected = Object.fromEntries(m.status.connections.map((c) => [c.site_id, c]));
+        if (m.status.transfers) S.queue.stats = m.status.transfers;
         renderConnections();
         renderQueue();
         applySettings();
       }
+      majConnexion();
     } else if (m.kind === "log") {
       pushLog(m.data);
     } else if (m.kind === "dirty") {
@@ -1909,7 +1965,14 @@ function wsConnect() {
       else if (m.data.what === "remote") revoirDistant();
     } else if (m.kind === "status") {
       const d = m.status || m.data;
-      if (d) { S.queue.stats = d.transfers || S.queue.stats; S.connected = Object.fromEntries((d.connections || []).map((c) => [c.site_id, c])); renderQueue(); renderConnections(); }
+      if (d) {
+        if (d.transfers) S.queue.stats = d.transfers;
+        /* un portrait sans connexions ne doit pas effacer celles qu'on croit
+           tenir : vide le fauteuil, pas le registre */
+        if (d.connections) S.connected = Object.fromEntries(d.connections.map((c) => [c.site_id, c]));
+        renderQueue();
+        renderConnections();
+      }
     } else if (m.kind === "toast") {
       toast(m.data.text, m.data.level === "error" ? "err" : "ok");
     } else if (m.kind === "job") {

@@ -92,17 +92,31 @@ button, input, select { font: inherit; color: inherit; }
 .btn.ghost:hover { background: var(--bg3); }
 .btn.mini { padding: 2px 6px; border-radius: 6px; background: transparent; border: 1px solid transparent; }
 .btn.mini:hover { border-color: var(--line); background: var(--bg3); }
-.btn:disabled { opacity: .45; cursor: default; }
-.btn:disabled:hover { background: var(--bg3); border-color: var(--line); }
+/* ce qui n'est pas actif se voit : l'affiche n'a plus à deviner si le geste
+   marche encore — le bouton muet est grisé, sans couleur, et ne répond pas */
+.btn:disabled { opacity: .32; filter: grayscale(1); cursor: not-allowed; }
+.btn:disabled:hover { background: var(--bg3); border-color: var(--line); transform: none; }
+.btn.primary:disabled { background: var(--bg3); color: var(--fg-dim); }
 .btn .i { width: 15px; height: 15px; fill: currentColor; }
 /* Sites favoris : la barre du haut les montre en boutons de passage immédiat,
-   et leur pastille dit où on est — vert, le fil est ouvert. */
+   et leur pastille dit où on est — vert, le fil est ouvert. Une barre vide
+   montre le chemin du raccourci au lieu de faire semblant de n'exister pas. */
 .favbar { display: flex; align-items: center; gap: 4px; }
-.favbar.hidden { display: none; }
 .btn.fav { padding: 4px 8px; }
 .btn.fav .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-dim); flex: none; }
 .btn.fav.live { border-color: var(--ok); color: var(--ok); }
 .btn.fav.live .dot { background: var(--ok); }
+.btn.fav.vide { opacity: .55; font-size: 11.5px; border-style: dashed; }
+.btn.fav.vide:hover { opacity: 1; }
+/* La pastille d'état : verte et tenue quand un fil est ouvert, éteinte sinon. */
+.pastille {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 3px 10px; border: 1px solid var(--line); border-radius: 20px;
+  background: var(--bg3); color: var(--fg-dim); font-size: 11.5px; white-space: nowrap;
+}
+.pastille .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); flex: none; transition: box-shadow .18s, background .18s; }
+.pastille.on { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.pastille.on .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
 .pill {
   background: var(--accent); color: var(--accent-fg);
   border-radius: 10px; padding: 0 6px; font-size: 11px; font-weight: 700;
@@ -353,12 +367,13 @@ legend { color: var(--accent); font-size: 12px; font-weight: 700; padding: 0 6px
 .tree .n.sel { background: var(--sel); color: var(--sel-fg); }
 .tree .n .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-dim); }
 .tree .n.live .dot { background: var(--ok); }
-/* l'étoile est le seul geste du tree qui ne choisisse pas le site : elle
-   l'accroche en barre du haut, ni plus ni moins */
-.tree .n .etoile { opacity: .28; cursor: pointer; font-size: 11px; line-height: 1; }
-.tree .n .etoile:hover { opacity: 1; }
-.tree .n .etoile.on { opacity: .95; color: var(--warn); }
-.tree .n.sel .etoile { opacity: .55; }
+/* l'étoile est le seul geste de l'arbre qui ne choisisse pas le site : elle
+   l'accroche en barre du haut, ni plus ni moins. Elle se voit, sinon elle ne
+   sert à rien. */
+.tree .n .etoile { opacity: .5; cursor: pointer; font-size: 13px; line-height: 1; }
+.tree .n .etoile:hover { opacity: 1; transform: scale(1.15); }
+.tree .n .etoile.on { opacity: 1; color: var(--warn); text-shadow: 0 0 6px color-mix(in srgb, var(--warn) 45%, transparent); }
+.tree .n.sel .etoile { opacity: .7; }
 .tree .n.sel .etoile.on { opacity: 1; color: var(--warn); }
 .tree .g { color: var(--fg-dim); font-weight: 700; }
 .tree .n.child { padding-left: 20px; }

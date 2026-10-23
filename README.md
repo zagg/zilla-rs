@@ -53,11 +53,13 @@ being:
   also where downloads land
 - FileZilla-compatible XML import/export
 - Quick connect, recents, bookmarks
-- A site flagged as favourite — the star in the tree, or the "favourite" box on
-  its sheet — hangs off the top bar as a button: one click to connect, one to
-  get out, and the dot on the button says whether a wire is open
-- "Se connecter" greys out while a connection holds the place, "Déconnecter"
-  greys out when none does: the state reads off the buttons, not off the log
+- A site flagged as favourite — the star in the manager's tree, the "☆ Make it a
+  shortcut" button on its sheet, or the "favourite" box — hangs off the top bar as a
+  button: one click to connect, one to get out, and the dot on the button says whether
+  a wire is open. An empty bar says so itself.
+- The connection state reads off three things: "Se connecter" greys while a wire is
+  open, "Déconnecter" greys when none is, and a pastille on the top bar stays lit for
+  as long as the workstation is connected somewhere.
 
 **Settings & logging**
 - Nine grouped settings tabs, applied live over WebSocket

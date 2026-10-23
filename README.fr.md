@@ -53,11 +53,13 @@ transferts, journal que l'on lit vraiment — tout en étant :
   c'est là que les téléchargements atterrissent
 - Import/export XML compatible FileZilla
 - Connexion rapide, sites récents, favoris
-- Un site mis en favori — l'étoile dans l'arbre, ou la case « favori » de sa fiche —
-  s'accroche en bouton dans la barre du haut : un clic pour s'y connecter, un autre
-  pour en sortir, la pastille du bouton dit si le fil est ouvert
-- « Se connecter » est grisé tant qu'une connexion tient la place, « Déconnecter »
-  l'est quand il n'y en a plus : l'état se lit sur les boutons, pas dans le journal
+- Un site mis en favori — l'étoile dans l'arbre, le bouton «☆ Mettre en raccourci »
+  de sa fiche, ou la case « favori » — s'accroche en bouton dans la barre du haut :
+  un clic pour s'y connecter, un autre pour en sortir, la pastille du bouton dit si
+  le fil est ouvert. Une barre sans favori le dit elle-même.
+- L'état de la connexion se lit sur trois choses : « Se connecter » est grisé tant
+  qu'un fil est ouvert, « Déconnecter » l'est quand il n'y en a plus, et une pastille
+  de la barre du haut tient allumé tant que le poste est branché quelque part.
 
 **Réglages et journal**
 - Neuf onglets de réglages appliqués à chaud via WebSocket

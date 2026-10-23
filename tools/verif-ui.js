@@ -158,6 +158,9 @@ let etat = {
   stats: { pending: 1, active: 1, done: 0, failed: 0, paused: false, bytes_per_sec: 204800, total_bytes: 1000, done_bytes: 0 },
 };
 const copie = () => JSON.parse(JSON.stringify(etat));
+/* le portrait des connexions tel que le poste le rend : `connected`, `live`,
+   `max` — c'est sur ces mots-là que la page regarde l'état du fil */
+let connexions = [];
 let appels = 0;
 global.fetch = async (u, o) => {
   appels++;
@@ -166,7 +169,7 @@ global.fetch = async (u, o) => {
   let donnees;
   if (chemin.startsWith("/status")) {
     donnees = {
-      version: "test", settings: {
+      version: "test", connections: connexions, transfers: etat.stats, settings: {
         general: { theme: "dark", font_size: 13, show_hidden_local: true, double_click: "transfer", confirm_delete: true, confirm_transfers: true, language: "fr", use_trash: false, notify_finish: false },
         ui: { show_toolbar: true, show_message_pane: true, show_transfer_pane: true, show_statusbar: true, local_columns: ["name", "size"], remote_columns: ["name", "size"] },
         logs: { level: "normal" }, transfers: { max_parallel: 2 }, net: {}, ftp: {},
@@ -198,7 +201,7 @@ const _setTimeout = setTimeout;
 global.setTimeout = (fn, ms) => { const t = _setTimeout(() => { timer.delete(t); fn(); }, Math.min(ms || 0, 5)); timer.add(t); return t; };
 
 (async () => {
-  new Function(JS + "\n;global.__api = { boot, S, montrerFile, voletTransferts, renderQueue, refreshQueue, majConnexion, rendreFavoris, viderFile };")();
+  new Function(JS + "\n;global.__api = { boot, S, montrerFile, voletTransferts, renderQueue, refreshQueue, refreshStatus, majConnexion, rendreFavoris, rendrePastille, viderFile };")();
   const A = global.__api;
   await new Promise((r) => _setTimeout(r, 200));
   // si boot() a heurté, il l'écrit dans la page : on le laisse voir
@@ -214,6 +217,7 @@ global.setTimeout = (fn, ms) => { const t = _setTimeout(() => { timer.delete(t);
   const barre = registry.get("fav-bar");
   const boutonConnecter = registry.get("btn-connect");
   const boutonDeconnecter = registry.get("btn-disconnect");
+  const pastille = registry.get("conn-dot");
 
   console.log("1) à l'ouverture   : volet caché =", tq.classList.contains("hidden"), "| journal caché =", journal.style.display === "none");
 
@@ -248,17 +252,31 @@ global.setTimeout = (fn, ms) => { const t = _setTimeout(() => { timer.delete(t);
   A.montrerFile();
   console.log("   volet caché =", registry.get("transfer-view").classList.contains("hidden"));
 
-  console.log("7) état de la connexion :");
-  A.S.connected = { s1: { connected: true, host: "demo.local", proto: "FTP", live: 1, max: 1 } };
-  A.majConnexion();
+  console.log("7) état de la connexion, tel que le poste le rend :");
+  connexions = [{ site_id: "s1", host: "demo.local", proto: "FTP", name: "anonymous@demo.local", connected: true, live: 1, max: 10 }];
+  await A.refreshStatus();
   console.log("   un fil ouvert  : « Se connecter » figé =", !!boutonConnecter.disabled,
-    "| « Déconnecter » libre =", !boutonDeconnecter.disabled);
-  A.S.connected = {};
-  A.majConnexion();
+    "| « Déconnecter » libre =", !boutonDeconnecter.disabled,
+    "| pastille allumée =", pastille.classList.contains("on"),
+    "| elle nomme le tenu =", /demo.local/.test(pastille.innerHTML));
+  connexions = [];
+  await A.refreshStatus();
   console.log("   plus de fil    : « Se connecter » libre =", !boutonConnecter.disabled,
-    "| « Déconnecter » figé =", !!boutonDeconnecter.disabled);
+    "| « Déconnecter » figé =", !!boutonDeconnecter.disabled,
+    "| pastille éteinte =", !pastille.classList.contains("on"));
+
+  console.log("   et le même état rendu par le seul compte des fils (live) :");
+  connexions = [{ site_id: "s1", host: "demo.local", proto: "SFTP", connections: 2, max_connections: 4 }];
+  await A.refreshStatus();
+  console.log("   vu ouvert      : « Déconnecter » libre =", !boutonDeconnecter.disabled,
+    "| pastille allumée =", pastille.classList.contains("on"));
+  connexions = [{ site_id: "s1", host: "demo.local", proto: "SFTP", connections: 0, max_connections: 4 }];
+  await A.refreshStatus();
+  console.log("   vu fermé       : « Se connecter » libre =", !boutonConnecter.disabled,
+    "| pastille éteinte =", !pastille.classList.contains("on"));
 
   console.log("8) favoris du gestionnaire :");
+  connexions = [];
   A.S.sites = [{ id: "s1", name: "démo", host: "demo.local", proto: "ftp", favorite: true },
                { id: "s9", name: "oublié", host: "autre", proto: "ftp" }];
   A.rendreFavoris();
@@ -269,7 +287,8 @@ global.setTimeout = (fn, ms) => { const t = _setTimeout(() => { timer.delete(t);
     "| le non-favori n'y est pas =", !registry.has("fav-s9"));
   A.S.sites = [A.S.sites[1]];
   A.rendreFavoris();
-  console.log("   plus aucun favori : la barre se range =", barre.classList.contains("hidden"));
+  console.log("   plus aucun favori : la barre reste ouverte et tend la perche =",
+    !!registry.get("fav-aucun"));
   console.log("\nrequêtes HTTP simulées :", appels);
   process.exit(0);
 })().catch((e) => { console.error("CA CASSE:", e); process.exit(1); });
