@@ -1,6 +1,6 @@
 [package]
 name = "zilla-rs"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 rust-version = "1.85"
 description = "Zilla-RS : client FTP/FTPS/SFTP/FTP over TLS multi-panes, clone web autonome de FileZilla, en Rust"
